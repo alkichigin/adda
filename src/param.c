@@ -3,7 +3,7 @@
  * Descr: initialization, parsing and handling of input parameters; also printout general information; contains file
  *        locking routines
  *
- * Copyright (C) 2006-2013 ADDA contributors
+ * Copyright (C) 2006-2014 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
@@ -100,6 +100,7 @@ bool calc_Csca;       // Calculate the scattering cross-section by integration
 bool calc_vec;        // Calculate the unnormalized asymmetry-parameter
 bool calc_asym;       // Calculate the asymmetry-parameter
 bool calc_mat_force;  // Calculate the scattering force by matrix-evaluation
+bool calc_EELS;       // Calculate electron energy loss probability
 bool store_force;     // Write radiation pressure per dipole to file
 bool store_ampl;      // Write amplitude matrix to file
 int phi_int_type; // type of phi integration (each bit determines whether to calculate with different multipliers)
@@ -219,6 +220,9 @@ static const struct subopt_struct beam_opt[]={
 	{"dipole","<x> <y> <z>","Field of a unit point dipole placed at x, y, z coordinates (in laboratory reference "
 		"frame). All arguments are in um. Orientation of the dipole is determined by -prop command line option."
 		"Implies '-scat_matr none'. If '-surf' is used, dipole position should be above the surface.",3,B_DIPOLE},
+	{"electron","<energy> <x> <y> <z>","Field of an electron of specified energy, passing  x, y, z coordinates " 
+		"(in laboratory reference frame). Energy is in keV, while corrdinates are in um. Orientation of the "
+        "trajectory is determined by -prop command line option. Implies '-scat_matr none'", 4, B_ELECTRON},
 	{"lminus","<width> [<x> <y> <z>]","Simplest approximation of the Gaussian beam. The beam width is obligatory and "
 		"x, y, z coordinates of the center of the beam (in laboratory reference frame) are optional (zero, by"
 		" default). All arguments are in um.",UNDEF,B_LMINUS},
@@ -459,7 +463,7 @@ static struct opt_struct options[]={
 #endif
 		"'zero' is a zero vector,\n"
 		"Default: auto",UNDEF,NULL},
-	{PAR(int),"{fcd|fcd_st|igt [<lim> [<prec>]]|igt_so|nloc <Rp>|nloc0 <Rp>|poi|so}",
+	{PAR(int),"{fcd|fcd_st|igt [<lim> [<prec>]]|igt_so|nloc <Rp>|nloc_av <Rp>|poi|so}",
 		"Sets prescription to calculate the interaction term.\n"
 		"'fcd' - Filtered Coupled Dipoles - requires dpl to be larger than 2.\n"
 		"'fcd_st' - static (long-wavelength limit) version of FCD.\n"
@@ -470,9 +474,9 @@ static struct opt_struct options[]={
 		"!!! 'igt' relies on Fortran sources that were disabled at compile time.\n"
 #endif
 		"'igt_so' - approximate evaluation of IGT using second order of kd approximation.\n"
-		"'nloc' - non-local interaction of two Gaussian dipole densities (averaged over the cube volume), <Rp> is the "
+		"'nloc' - non-local interaction of two Gaussian dipole densities (based on point value of Gh), <Rp> is the "
 		"width of the latter in um (must be non-negative).\n"
-		"'nloc0' - same as 'nloc' but based on point value of Gh.\n"
+		"'nloc_av' - same as 'nloc' but based on averaging over the cube volume.\n"
 		"'poi' - (the simplest) interaction between point dipoles.\n"
 		"'so' - under development and incompatible with '-anisotr'.\n"
 #ifdef SPARSE
@@ -545,7 +549,7 @@ static struct opt_struct options[]={
 		"respectively.\n"
 		"Examples: 1 (one integration with no multipliers),\n"
 		"          6 (two integration with cos(2*phi) and sin(2*phi) multipliers).",1,NULL},
-	{PAR(pol),"{cldr|cm|dgf|fcd|igt_so|lak|ldr [avgpol]|nloc <Rp>|nloc0 <Rp>|rrc|so}",
+	{PAR(pol),"{cldr|cm|dgf|fcd|igt_so|lak|ldr [avgpol]|nloc <Rp>|nloc_av <Rp>|rrc|so}",
 		"Sets prescription to calculate the dipole polarizability.\n"
 		"'cldr' - Corrected LDR (see below), incompatible with '-anisotr'.\n"
 		"'cm' - (the simplest) Clausius-Mossotti.\n"
@@ -555,8 +559,9 @@ static struct opt_struct options[]={
 		"'lak' - (by Lakhtakia) exact integration of Green's Tensor over a sphere.\n"
 		"'ldr' - Lattice Dispersion Relation, optional flag 'avgpol' can be added to average polarizability over "
 		"incident polarizations.\n"
-		"'nloc' - non-local (Gaussian dipole density), <Rp> is the width of the latter in um (must be non-negative).\n"
-		"'nloc0' - same as 'nloc' but based on lattice sums of Gh.\n"
+		"'nloc' - non-local (Gaussian dipole density, based on lattice sums), <Rp> is the width of the latter in um "
+		"(must be non-negative).\n"
+		"'nloc_av' - same as 'nloc' but based on averaging of Gh over the dipole volume.\n"
 		"'rrc' - Radiative Reaction Correction (added to CM).\n"
 		"'so' - under development and incompatible with '-anisotr'.\n"
 		"Default: ldr (without averaging).",UNDEF,NULL},
@@ -1186,9 +1191,9 @@ PARSE_FUNC(int)
 		TestNonNegative(nloc_Rp,"Gaussian width");
 		noExtraArgs=false;
 	}
-	else if (strcmp(argv[1],"nloc0")==0) {
-		IntRelation=G_NLOC0;
-		if (Narg!=2) NargErrorSub(Narg,"int nloc0","1");
+	else if (strcmp(argv[1],"nloc_av")==0) {
+		IntRelation=G_NLOC_AV;
+		if (Narg!=2) NargErrorSub(Narg,"int nloc_av","1");
 		ScanDoubleError(argv[2],&nloc_Rp);
 		TestNonNegative(nloc_Rp,"Gaussian width");
 		noExtraArgs=false;
@@ -1336,9 +1341,9 @@ PARSE_FUNC(pol)
 		TestNonNegative(polNlocRp,"Gaussian width");
 		noExtraArgs=false;
 	}
-	else if (strcmp(argv[1],"nloc0")==0) {
-		PolRelation=POL_NLOC0;
-		if (Narg!=2) NargErrorSub(Narg,"pol nloc0","1");
+	else if (strcmp(argv[1],"nloc_av")==0) {
+		PolRelation=POL_NLOC_AV;
+		if (Narg!=2) NargErrorSub(Narg,"pol nloc_av","1");
 		ScanDoubleError(argv[2],&polNlocRp);
 		TestNonNegative(polNlocRp,"Gaussian width");
 		noExtraArgs=false;
@@ -1529,7 +1534,7 @@ PARSE_FUNC(test)
 }
 PARSE_FUNC(V)
 {
-	char copyright[]="\n\nCopyright (C) 2006-2013 ADDA contributors\n"
+	char copyright[]="\n\nCopyright (C) 2006-2014 ADDA contributors\n"
 		"This program is free software; you can redistribute it and/or modify it under the terms of the GNU General "
 		"Public License as published by the Free Software Foundation; either version 3 of the License, or (at your "
 		"option) any later version.\n\n"
@@ -1804,6 +1809,17 @@ static void RemoveLockFile(FILEHANDLE fd ONLY_FOR_LOCK,const char * restrict fna
 
 //======================================================================================================================
 
+static void UpdateSymVec(const double a[static 3])
+// tests whether vector a satisfies a number of symmetries (with round-off errors) and cancels the failing symmetries
+{
+	if (fabs(a[0])>ROUND_ERR) symX=false;
+	if (fabs(a[1])>ROUND_ERR) symY=false;
+	if (fabs(a[2])>ROUND_ERR) symZ=false;
+	if (!vAlongZ(a)) symR=false;
+}
+
+//======================================================================================================================
+
 void InitVariables(void)
 // some defaults are specified also in const.h
 {
@@ -1863,6 +1879,7 @@ void InitVariables(void)
 	calc_vec=false;
 	calc_asym=false;
 	calc_mat_force=false;
+    calc_EELS=false;
 	store_force=false;
 	store_mueller=true;
 	store_ampl=false;
@@ -1961,8 +1978,17 @@ void VariablesInterconnect(void)
 	/* very unlikely that calc_Cabs will ever be false, but strictly speaking dCabs should be calculated before Cext,
 	 * when SQ_FINDIP is used
 	 */
+    if (beamtype == B_ELECTRON) {
+        calc_Cabs = calc_Cext = calc_Csca =false;
+        calc_EELS = true;
+    }
 	if (ScatRelation==SQ_FINDIP && calc_Cext) calc_Cabs=true;
 	if (IntRelation==G_SO) reduced_FFT=false;
+	if (IntRelation==G_SO) {
+		reduced_FFT=false;
+		// this limitation is due to assumption of reciprocity in DecayCross()
+		if (beamtype==B_DIPOLE) PrintError("'-beam dipole' and '-int so' can not be used together");
+	}
 	/* TO ADD NEW INTERACTION FORMULATION
 	 * If the new Green's tensor is non-symmetric (which is very unlikely) add it to the definition of reduced_FFT
 	 */
@@ -2104,17 +2130,13 @@ void VariablesInterconnect(void)
 	// initialize averaging over orientation
 	if (orient_avg) {
 		ReadAvgParms(avg_parms);
-		if (sym_type==SYM_AUTO) sym_type=SYM_NO;
+		symX=symY=symZ=symR=false;
 		avg_inc_pol=true;
 	}
-	else {
-		// else - initialize rotation stuff
+	else { // initialize rotation stuff and test symmetries of the beam in particle reference frame
 		InitRotation();
-		/* if not default incidence (generally, along z-axis), break the symmetry completely. This can be improved to
-		 * account for some special cases, however, then symmetry of Gaussian beam should be treated more thoroughly
-		 * than now.
-		 */
-		if (!vAlongZ(prop) && sym_type==SYM_AUTO) sym_type=SYM_NO;
+		UpdateSymVec(prop);
+		if (beam_asym) UpdateSymVec(beam_center);
 	}
 	ipr_required=(IterMethod==IT_BICGSTAB || IterMethod==IT_CGNR);
 	/* TO ADD NEW ITERATIVE SOLVER
@@ -2134,6 +2156,8 @@ void FinalizeSymmetry(void) {
 	// finalize symmetries
 	if (sym_type==SYM_NO) symX=symY=symZ=symR=false;
 	else if (sym_type==SYM_ENF) symX=symY=symZ=symR=true;
+	// test based on SR^2 = SX*SY; uses handmade XOR
+	if (symR && ((symX&&!symY) || (symY&&!symX))) LogError(ONE_POS,"Inconsistency in internally defined symmetries");
 	// additional tests in case of two polarization runs
 	if (!(symR && !scat_grid)) {
 		if (beamtype==B_READ && beam_fnameX==NULL)
@@ -2358,9 +2382,11 @@ void PrintInfo(void)
 				if (avg_inc_pol) fprintf(logfile," (averaged over incident polarization)");
 				fprintf(logfile,"\n");
 				break;
-			case POL_NLOC: fprintf(logfile,"'Non-local' (averaged, Gaussian width Rp="GFORMDEF")\n",polNlocRp); break;
-			case POL_NLOC0:
+			case POL_NLOC:
 				fprintf(logfile,"'Non-local' (based on lattice sum, Gaussian width Rp="GFORMDEF")\n",polNlocRp);
+				break;
+			case POL_NLOC_AV:
+				fprintf(logfile,"'Non-local' (averaged, Gaussian width Rp="GFORMDEF")\n",polNlocRp);
 				break;
 			case POL_RRC: fprintf(logfile,"'Radiative Reaction Correction'\n"); break;
 			case POL_SO: fprintf(logfile,"'Second Order'\n"); break;
@@ -2388,12 +2414,8 @@ void PrintInfo(void)
 				else fprintf(logfile,"for distance < "GFORMDEF" dipole sizes)\n",igt_lim);
 				break;
 			case G_IGT_SO: fprintf(logfile,"'Integrated Green's tensor [approximation O(kd^2)]'\n"); break;
-			case G_NLOC:
-				fprintf(logfile,"'Non-local interaction' (averaged, Gaussian width Rp="GFORMDEF")\n",nloc_Rp);
-				break;
-			case G_NLOC0:
-				fprintf(logfile,"'Non-local interaction' (point-value, Gaussian width Rp="GFORMDEF")\n",nloc_Rp);
-				break;
+			case G_NLOC: fprintf(logfile,"'Non-local' (point-value, Gaussian width Rp="GFORMDEF")\n",nloc_Rp); break;
+			case G_NLOC_AV: fprintf(logfile,"'Non-local' (averaged, Gaussian width Rp="GFORMDEF")\n",nloc_Rp); break;
 			case G_POINT_DIP: fprintf(logfile,"'as Point dipoles'\n"); break;
 			case G_SO: fprintf(logfile,"'Second Order'\n"); break;
 		}
@@ -2447,9 +2469,17 @@ void PrintInfo(void)
 		 */
 		// log Symmetry options
 		switch (sym_type) {
-			case SYM_AUTO: break; //  do not print anything in this case
-			case SYM_NO: fprintf(logfile,"No symmetries are used\n"); break;
-			case SYM_ENF: fprintf(logfile,"Symmetry is enforced by user (warning!)\n"); break;
+			case SYM_AUTO:
+				fprintf(logfile,"Symmetries: ");
+				if (symX) fprintf(logfile,"X");
+				if (symY) fprintf(logfile,"Y");
+				if (symZ) fprintf(logfile,"Z");
+				if (symR) fprintf(logfile,"R");
+				if (!(symX||symY||symZ||symR)) fprintf(logfile,"none");
+				fprintf(logfile,"\n");
+				break;
+			case SYM_NO: fprintf(logfile,"Symmetries: cancelled by user\n"); break;
+			case SYM_ENF: fprintf(logfile,"Symmetries: enforced by user (warning!)\n"); break;
 		}
 		// log optimization method
 		if (save_memory) fprintf(logfile,"Optimization is done for minimum memory usage\n");

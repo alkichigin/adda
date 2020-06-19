@@ -2,7 +2,7 @@
  * $Date::                            $
  * Descr: all the constants used by ADDA code, including enum constants, also defines some useful macros
  *
- * Copyright (C) 2006-2013 ADDA contributors
+ * Copyright (C) 2006-2014 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
@@ -18,7 +18,7 @@
 #define __const_h
 
 // version number (string)
-#define ADDA_VERSION "1.3b3"
+#define ADDA_VERSION "1.3b4"
 
 /* ADDA uses certain C99 extensions, which are widely supported by GNU and Intel compilers. However, they may be not
  * completely supported by e.g. Microsoft Visual Studio compiler. Therefore, we check the version of the standard here
@@ -180,17 +180,17 @@ enum sh { // shape types
 };
 
 enum pol { // which way to calculate coupleconstant
-	POL_CLDR,   // Corrected Lattice Dispersion Relation
-	POL_CM,     // Clausius-Mossotti
-	POL_DGF,    // Digitized Green's Function (second order approximation of LAK)
-	POL_FCD,    // Filtered Coupled Dipoles
-	POL_IGT_SO, // Second order approximation to Green's tensor integrated over a cube
-	POL_LAK,    // Exact result of IGT for sphere
-	POL_LDR,    // Lattice Dispersion Relation
-	POL_NLOC,   // non-local extension (Gaussian dipole-density)
-	POL_NLOC0,  // same as NLOC, but based on lattice sum
-	POL_RRC,    // Radiative Reaction correction
-	POL_SO      // Second Order formulation
+	POL_CLDR,    // Corrected Lattice Dispersion Relation
+	POL_CM,      // Clausius-Mossotti
+	POL_DGF,     // Digitized Green's Function (second order approximation of LAK)
+	POL_FCD,     // Filtered Coupled Dipoles
+	POL_IGT_SO,  // Second order approximation to Green's tensor integrated over a cube
+	POL_LAK,     // Exact result of IGT for sphere
+	POL_LDR,     // Lattice Dispersion Relation
+	POL_NLOC,    // non-local extension (Gaussian dipole-density, formula based on lattice sums)
+	POL_NLOC_AV, // same as NLOC, but based on averaging of Gaussian over the dipole volume
+	POL_RRC,     // Radiative Reaction correction
+	POL_SO       // Second Order formulation
 	/* TO ADD NEW POLARIZABILITY FORMULATION
 	 * add an identifier starting with 'POL_' and a descriptive comment to this list in the alphabetical order.
 	 */
@@ -212,7 +212,7 @@ enum inter { // how to calculate interaction term
 	G_IGT,       // (direct) integration of Green's tensor
 	G_IGT_SO,    // approximate integration of Green's tensor (based on ideas of SO)
 	G_NLOC,      // non-local extension (interaction of Gaussian dipole-densities)
-	G_NLOC0,     // non-local extension (interaction of Gaussian dipole-densities)
+	G_NLOC_AV,   // same as NLOC, but based on averaging of Gaussian over the dipole volume
 	G_POINT_DIP, // as point dipoles
 	G_SO         // Second Order formulation
 	/* TO ADD NEW INTERACTION FORMULATION
@@ -244,6 +244,95 @@ enum refl { // how to calculate interaction of dipoles through the nearby surfac
 // two boundaries for separation between G_SO 'close', 'median', and 'far'
 #define G_BOUND_CLOSE  1 // k*R^2/d < GB_CLOSE => 'close'
 #define G_BOUND_MEDIAN 1 // k*R < GB_MEDIAN => 'median'
+
+// Constants for modified Bessel function calculations (probably not high enough precission though!!! )
+// For Bessel function I0:
+#define BESI0_P1  1.0
+#define BESI0_P2  3.5156229
+#define BESI0_P3  3.0899424
+#define BESI0_P4  1.2067492
+#define BESI0_P5  0.2659732
+#define BESI0_P6  0.0360768
+#define BESI0_P7  0.0045813
+
+#define BESI0_Q1  0.39894228
+#define BESI0_Q2  0.01328592
+#define BESI0_Q3  0.00225319
+#define BESI0_Q4  -0.00157565
+#define BESI0_Q5  0.00916281
+#define BESI0_Q6  -0.02057706
+#define BESI0_Q7  0.02635537
+#define BESI0_Q8  -0.01647633
+#define BESI0_Q9  0.00392377
+
+// For Bessel function I1:
+#define BESI1_P1  0.5
+#define BESI1_P2  0.87890594
+#define BESI1_P3  0.51498869
+#define BESI1_P4  0.15084934
+#define BESI1_P5  0.02658733
+#define BESI1_P6  0.00301532
+#define BESI1_P7  0.00032411
+
+#define BESI1_Q1  0.39894228
+#define BESI1_Q2  -0.03988024
+#define BESI1_Q3  -0.00362018
+#define BESI1_Q4  0.00163801
+#define BESI1_Q5  -0.01031555
+#define BESI1_Q6  0.02282967
+#define BESI1_Q7  -0.02895312
+#define BESI1_Q8  0.01787654
+#define BESI1_Q9  -0.00420059
+
+// For Bessel function K0:
+#define BESK0_P1  -0.57721566
+#define BESK0_P2  0.42278420
+#define BESK0_P3  0.23069756
+#define BESK0_P4  0.03488590
+#define BESK0_P5  0.00262698
+#define BESK0_P6  0.00010750
+#define BESK0_P7  0.0000074
+//might need another 0 in front! ^^
+#define BESK0_Q1  1.25331414
+#define BESK0_Q2  -0.07832358
+#define BESK0_Q3  0.02189568
+#define BESK0_Q4  -0.01062446
+#define BESK0_Q5  0.00587872
+#define BESK0_Q6  -0.00251540
+#define BESK0_Q7  0.00053208
+
+// For Bessel function K1:
+#define BESK1_P1  1.0
+#define BESK1_P2  0.15443144
+#define BESK1_P3  -0.67278579
+#define BESK1_P4  -0.18156897
+#define BESK1_P5  -0.01919402
+#define BESK1_P6  -0.00110404
+#define BESK1_P7  -0.00004686
+
+#define BESK1_Q1  1.25331414
+#define BESK1_Q2  0.23498619
+#define BESK1_Q3  -0.03655620
+#define BESK1_Q4  0.01504268
+#define BESK1_Q5  -0.00780353
+#define BESK1_Q6  0.00325614
+#define BESK1_Q7  -0.00068245
+
+// Physical constants:
+// from http://www1.bipm.org/en/si/si_brochure/chapter4/table7.html
+
+#define keV 1.60217653e-16                          // kJ
+#define c0 299792458                                // m/s (exact)
+#define i_c0 3.335640951981520495755767144749185e-9 // s/m
+#define hbar 1.05457168e-34                         // J s
+#define i_hbar 9.48252238230708499036287462018439e33// 1/(J s)
+#define hbar_eV 6.582119e-16                        // eV s
+#define i_hbar_eV 1.519267514356120682222856796461111e15 // 1/(eV s)
+#define electron_mass 9.1093826e-31                 // kg
+#define i_electron_mass 1.0977692e30                // 1/kg
+#define electron_charge 1.60217653e-19              // C
+#define epsilon_0 8.85418781762038985053656303171075e-12 // F/m
+#define i_epsilon_0 1.129409066758147138350823392936757e11 // m/F
 
 enum iter { // iterative methods
 	IT_BCGS2,    // Enhanced Bi-Conjugate Gradient Stabilized (2)
@@ -277,6 +366,7 @@ enum beam { // beam types
 	B_BARTON5, // 5th order description of the Gaussian beam
 	B_DAVIS3,  // 3rd order description of the Gaussian beam
 	B_DIPOLE,  // field of a point dipole
+    B_ELECTRON,// a single electron
 	B_LMINUS,  // 1st order description of the Gaussian beam
 	B_PLANE,   // infinite plane wave
 	B_READ     // read from file
@@ -332,6 +422,7 @@ enum init_field { // how to calculate initial field to be used in the iterative 
 
 // numbers less than this value (compared to unity) are considered to be zero (approximately 10*DBL_EPSILON)
 #define ROUND_ERR 1E-15
+#define SQRT_RND_ERR 3E-8 // sqrt(ROUND_ERR)
 
 // output and input file and directory names (can only be changed at compile time)
 #define F_EXPCOUNT      "ExpCount"
@@ -342,6 +433,7 @@ enum init_field { // how to calculate initial field to be used in the iterative 
 #define F_DIPPOL        "DipPol"
 #define F_BEAM          "IncBeam"
 #define F_GRANS         "granules"
+#define F_EELS          "EELSProb"
 	// suffixes
 #define F_XSUF          "-X"
 #define F_YSUF          "-Y"
