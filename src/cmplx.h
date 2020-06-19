@@ -2,7 +2,7 @@
  * $Date::                            $
  * Descr: inline complex functions, functions on length-3 real and complex vectors, and several auxiliary functions
  *
- * Copyright (C) 2006-2008,2010,2012-2014 ADDA contributors
+ * Copyright (C) 2006-2008,2010,2012-2013 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
@@ -21,11 +21,8 @@
 #include "const.h"    // for math constants
 #include "types.h"    // for doublecomplex
 // system headers
-#include <math.h>
+#include <math.h>     // for cos, sin
 #include <string.h>   // for memcpy
-
-// Uncomment this to turn off calculation of imExp using tables
-//#define NO_IMEXP_TABLE
 
 #ifdef USE_SSE3
 #include <xmmintrin.h>
@@ -36,16 +33,6 @@
 // useful macro for printing complex numbers and matrices
 #define REIM(a) creal(a),cimag(a)
 #define REIM3V(a) REIM((a)[0]),REIM((a)[1]),REIM((a)[2])
-
-#ifndef NO_IMEXP_TABLE
-void imExpTableInit(void);
-doublecomplex imExpTable(double arg);
-#endif
-void imExp_arr(doublecomplex arg,int size,doublecomplex *c);
-
-/* We do not use 'restrict' in the following functions since they are all inline - compiler will optimize the code
- * inside the calling function and decide whether the arrays can alias or not.
- */
 
 //======================================================================================================================
 // operations on complex numbers
@@ -60,22 +47,6 @@ static inline double cAbs2(const doublecomplex a)
 
 static inline doublecomplex cSqrtCut(const doublecomplex a)
 // square root of complex number, with explicit handling of branch cut (not to depend on sign of zero of imaginary part)
-/* It is designed for calculating normal component of the transmitted wavevector when passing through the plane
- * interface. However, such choice of branch cut (while physically correct) leads to all kind of weird consequences.
- *
- * For instance, the electric field above the interface for plane wave propagating from a slightly absorbing substrate
- * at large incident angle (larger than critical angle for purely real refractive index) is unexpectedly large. This
- * happens because the wave in the vacuum is inhomogeneous and the real part of wavevector is almost parallel to the
- * surface. So the field above the surface actually comes from distant points on the surface, which has much larger
- * amplitude of the incident wave from below (compared to that under the observation point). Since the distance along
- * the surface (or the corresponding slope) is inversely proportional to the imaginary part of the substrate refractive
- * index, the effect remains finite even in the limit of absorption going to zero. Therefore, in this case there exist
- * a discontinuity when switching from non-absorbing to absorbing substrate. Physically, this fact is a consequence of
- * the infinite lateral extent of the plane wave.
- *
- * Exactly the same issue exist when scattering into the absorbing medium is calculated. At large scattering angles the
- * amplitude becomes very large, which also amplifies a lot the calculated Csca.
- */
 {
 	if (cimag(a)==0) {
 		if (creal(a)>=0) return sqrt(a);
@@ -87,20 +58,43 @@ static inline doublecomplex cSqrtCut(const doublecomplex a)
 //======================================================================================================================
 
 static inline doublecomplex imExp(const double arg)
-/* exponent of imaginary argument Exp(i*arg)
- * !!! should not be used in parameter parsing (table is initialized in VariablesInterconnect())
+// exponent of imaginary argument Exp(i*arg); optimization is performed by compiler
+// this may be faster than using generic cexp, since imaginary type is not supported by all compilers
+{
+	return cos(arg) + I*sin(arg);
+}
+
+//======================================================================================================================
+
+static inline void imExp_arr(const double arg,const int size,doublecomplex *c)
+/* construct an array of exponent of imaginary argument c=Exp(i*k*arg), where k=0,1,...,size-1. Uses stable recurrence
+ * from Numerical Recipes. Optimization of the initial simultaneous calculation of sin and cos is performed by compiler;
+ * It is assumed that size is at least 1
  */
 {
-#ifdef NO_IMEXP_TABLE
-	/* We tried different standard options. (cos + I*sin) is almost twice slower than cexp, while sincos (GNU extension)
-	 * is slightly faster (3.52 - 2.39 - 2.29 for matvec in test sparse runs, where about 1.23 is for non-exp part -
-	 * median values over 10 runs). So we prefer to use standard cexp.
-	 * When using table (below) the corresponding timing is 1.70.
-	 */
-	return cexp(I*arg);
-#else
-	return imExpTable(arg);
-#endif
+	int k;
+	double a,b;
+	doublecomplex d,tmp;
+
+	c[0]=1;
+	if (size>1) {
+		// set a=2*sin^2(arg/2), b=sin(arg), d = 1 - exp(i*arg)
+		a=sin(arg/2);
+		b=cos(arg/2);
+		b*=2*a;
+		a*=2*a;
+		d= a - I*b;
+		// this a bit faster than in the main cycle
+		c[1]=1-d;
+		// main cycle
+		for (k=2;k<size;k++) {
+			/* potentially compiler may group terms to accelerate calculation but lose significant digits. We hope it
+			 * doesn't happen, but it should not be a big problem anyway
+			 */
+			tmp=c[k-1]*d;
+			c[k]=c[k-1]-tmp;
+		}
+	}
 }
 
 //======================================================================================================================
@@ -589,16 +583,6 @@ static inline double Rad2Deg(const double rad)
 // transforms angle in radians to degrees
 {
 	return (INV_PI_180*rad);
-}
-
-//======================================================================================================================
-
-static inline bool TestBelowDeg(const double deg)
-/* tests if the direction is below the substrate using the degree theta in degrees;
- * if unsure (within rounded error) returns false (above)
- */
-{
-	return fabs(fmod(fabs(deg),360)-180) < 90*(1-ROUND_ERR);
 }
 
 //======================================================================================================================

@@ -13,7 +13,7 @@
  *        components for a fundamental Gaussian-beam," J.Appl.Phys. 66,2800-2802 (1989).
  *        Eqs.(25)-(28) - complex conjugate.
  *
- * Copyright (C) 2006-2014 ADDA contributors
+ * Copyright (C) 2006-2013 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
@@ -36,7 +36,6 @@
 // system headers
 #include <stdio.h>
 #include <string.h>
-#include <float.h>
 
 // SEMI-GLOBAL VARIABLES
 
@@ -47,8 +46,6 @@ extern const char *beam_fnameY;
 extern const char *beam_fnameX;
 extern const opt_index opt_beam;
 
-extern void cik01_(doublecomplex *z, doublecomplex *cbi0, doublecomplex *cdi0, doublecomplex *cbi1, doublecomplex *cdi1, doublecomplex *cbk0, doublecomplex *cdk0, doublecomplex *cbk1, doublecomplex *cdk1);
-
 // used in CalculateE.c
 double C0dipole,C0dipole_refl; // inherent cross sections of exciting dipole (in free space and addition due to surface)
 
@@ -56,10 +53,10 @@ double C0dipole,C0dipole_refl; // inherent cross sections of exciting dipole (in
 double beam_center_0[3]; // position of the beam center in laboratory reference frame
 /* complex wave amplitudes of secondary waves (with phase relative to particle center);
  * The transmitted wave can be inhomogeneous wave (when msub is complex), then eIncTran (e) is normalized
- * counter-intuitively. Before multiplying by tc, it satisfies (e,e)=1!=||e||^2. This normalization is consistent with
- * used formulae for transmission coefficients. So this transmission coefficient is not (generally) equal to the ratio
- * of amplitudes of the electric fields. In particular, when E=E0*e, ||E||!=|E0|*||e||, where
- * ||e||^2=(e,e*)=|e_x|^2+|e_y|^2+|e_z|^2=1
+ * counter-intuitively. Before multiplying by tc/sqrt(msub), it satisfies (e,e)=1!=||e||^2. This normalization is
+ * consistent with used formulae for transmission coefficients. So this transmission coefficient is not (generally)
+ * equal to the ratio of amplitudes of the electric fields.
+ * In particular, when E=E0*e, ||E||!=|E0|*||e||, where ||e||^2=(e,e*)=|e_x|^2+|e_y|^2+|e_z|^2=1
  *
  * !!! TODO: determine whether they are actually needed in crosssec.c, or make them static here
  */
@@ -70,25 +67,8 @@ char beam_descr[MAX_MESSAGE2]; // string for log file with beam parameters
 // LOCAL VARIABLES
 static double s,s2;            // beam confinement factor and its square
 static double scale_x,scale_z; // multipliers for scaling coordinates
-static doublecomplex ki,kt;    // abs of normal components of k_inc/k0, and ktran/k0
+static doublecomplex ki,kt;   // abs of normal components of k_inc/k0, and ktran/k0
 static doublecomplex ktVec[3]; // k_tran/k0
-static double p0;              // amplitude of the incident dipole moment
-static double e_energy;        // kinetic energy of the electron
-static doublecomplex m_host;   // refractive index of the host medium
-static doublecomplex eps_omega;// dielectric permittivity of the host medium
-static doublecomplex gamma_eps;// gamma-epsilon is same as Lorentz factor, except the speed of light is the speed of light in the medium
-static doublecomplex gamma_eps_inv;// 1/gamma_eps
-static double omega;           // angular frequency
-static double v_electron;      // speed of the electron
-static doublecomplex e_inc_pr; // prefactor in the incident field of the electron
-static doublecomplex e_w_v;   // prefactor in an argument of a phase exponent in the incident field of the electron
-static doublecomplex e_w_gv;  // prefactor in an argument of the Bessel_K in the incident field of the electron
-const double q_electron = -4.803204673e-10; //electric charge of an electron, esu
-const double c_light = 29979245800; //speed of light in vacuum, cm/s
-//const double q_electron = -1.60217662e-19; //electric charge of an electron, SI
-//const double c_light = 299792458; //speed of light in vacuum, SI
-//const double eps0 = 8.8541878128e-12; //vacuum permittivity
-const double e_energy_rest = 510.99895; //Electron rest mass, keV
 /* TO ADD NEW BEAM
  * Add here all internal variables (beam parameters), which you initialize in InitBeam() and use in GenerateB()
  * afterwards. If you need local, intermediate variables, put them into the beginning of the corresponding function.
@@ -120,26 +100,18 @@ void InitBeam(void)
 				// Here we set ki,kt,ktVec and propagation directions prIncRefl,prIncTran
 				if (prop_0[2]>0) { // beam comes from the substrate (below)
 					// here msub should always be defined
-					inc_scale=1/creal(msub);
 					ki=msub*prop_0[2];
-					/* Special case for msub near 1 to remove discontinuities for near-grazing incidence. The details
-					 * are discussed in CalcFieldSurf() in crosssec.c.
-					 */
-					if (cabs(msub-1)<ROUND_ERR && fabs(ki)<SQRT_RND_ERR) kt=ki;
-					else kt=cSqrtCut(1 - msub*msub*(prop_0[0]*prop_0[0]+prop_0[1]*prop_0[1]));
+					kt=cSqrtCut(1 - msub*msub*(prop_0[0]*prop_0[0]+prop_0[1]*prop_0[1]));
 					// determine propagation direction and full wavevector of wave transmitted into substrate
 					ktVec[0]=msub*prop_0[0];
 					ktVec[1]=msub*prop_0[1];
 					ktVec[2]=kt;
 				}
 				else if (prop_0[2]<0) { // beam comes from above the substrate
-					inc_scale=1;
 					vRefl(prop_0,prIncRefl);
 					ki=-prop_0[2];
 					if (!msubInf) {
-						// same special case as above
-						if (cabs(msub-1)<ROUND_ERR && fabs(ki)<SQRT_RND_ERR) kt=ki;
-						else kt=cSqrtCut(msub*msub - (prop_0[0]*prop_0[0]+prop_0[1]*prop_0[1]));
+						kt=cSqrtCut(msub*msub - (prop_0[0]*prop_0[0]+prop_0[1]*prop_0[1]));
 						// determine propagation direction of wave transmitted into substrate
 						ktVec[0]=prop_0[0];
 						ktVec[1]=prop_0[1];
@@ -157,19 +129,16 @@ void InitBeam(void)
 			return;
 		case B_DIPOLE:
 			vCopy(beam_pars,beam_center_0);
-			if (surface) {
-				if (beam_center_0[2]<=-hsub)
-					PrintErrorHelp("External dipole should be placed strictly above the surface");
-				inc_scale=1; // but scaling of Mueller matrix is weird anyway
-			}
+			if (surface && beam_center_0[2]<=-hsub)
+				PrintErrorHelp("External dipole should be placed strictly above the surface");
 			// in weird scenarios the dipole can be positioned exactly at the origin; reused code from Gaussian beams
 			beam_asym=(beam_center_0[0]!=0 || beam_center_0[1]!=0 || beam_center_0[2]!=0);
-			if (!beam_asym) vInit(beam_center);
-			/* definition of p0 is important for scaling of many scattering quantities (that are normalized to incident
-			 * irradiance). Alternative definition is p0=1, but then the results will scale with unit of length
-			 * (breaking scale invariance)
-			 */
-			p0=1/(WaveNum*WaveNum*WaveNum);
+			if (beam_asym) { // if necessary break the symmetry of the problem
+				if (beam_center_0[0]!=0) symX=symR=false;
+				if (beam_center_0[1]!=0) symY=symR=false;
+				if (beam_center_0[2]!=0) symZ=false;
+			}
+			else vInit(beam_center);
 			if (IFROOT) sprintf(beam_descr,"point dipole at "GFORMDEF3V,COMP3V(beam_center_0));
 			return;
 		case B_LMINUS:
@@ -181,7 +150,12 @@ void InitBeam(void)
 			TestPositive(w0,"beam width");
 			vCopy(beam_pars+1,beam_center_0);
 			beam_asym=(beam_Npars==4 && (beam_center_0[0]!=0 || beam_center_0[1]!=0 || beam_center_0[2]!=0));
-			if (!beam_asym) vInit(beam_center);
+			if (beam_asym) { // if necessary break the symmetry of the problem
+				if (beam_center_0[0]!=0) symX=symR=false;
+				if (beam_center_0[1]!=0) symY=symR=false;
+				if (beam_center_0[2]!=0) symZ=false;
+			}
+			else vInit(beam_center);
 			s=1/(WaveNum*w0);
 			s2=s*s;
 			scale_x=1/w0;
@@ -205,40 +179,9 @@ void InitBeam(void)
 				                                      "\tCenter position: "GFORMDEF3V,w0,s,COMP3V(beam_center_0));
 			}
 			return;
-		case B_ELECTRON:
-			if (surface) PrintError("Currently, electron incident beam is not supported for '-surf'");
-			// initialize parameters
-			e_energy=beam_pars[0];
-			TestPositive(e_energy,"kinetic energy of the electron");
-			beam_center_0[0] = beam_pars[1];
-			beam_center_0[1] = beam_pars[2];
-			beam_center_0[2] = 0;
-			beam_asym=(beam_center_0[0]!=0 || beam_center_0[1]!=0 || beam_center_0[2]!=0);
-			if (!beam_asym) vInit(beam_center);
-			m_host = beam_pars[3] + 0*I; //complex number in the future
-			scale_z = 1e-7; //nm/Ñm
-			//scale_z = 1e-9; //nm/m
-			TestPositive(creal(m_host),"refractive index of the host medium");
-			omega = WaveNum*c_light/(m_host*scale_z);
-			printf("Omega = %e\n", omega);
-			eps_omega = m_host*m_host;
-			v_electron = c_light*sqrt(1-pow((e_energy_rest/(e_energy+e_energy_rest)),2));
-			//printf("v = %ec\n", v_electron/c_light);
-			gamma_eps_inv = csqrt(1-pow((v_electron/c_light),2)*eps_omega);
-			gamma_eps = 1/gamma_eps_inv;
-			e_inc_pr = 2*q_electron*omega*gamma_eps_inv/(eps_omega*v_electron*v_electron);
-			//e_inc_pr = q_electron*omega*gamma_eps_inv/(2*PI*eps0*eps_omega*v_electron*v_electron);
-			e_w_v = omega/v_electron;
-			e_w_gv = omega*gamma_eps_inv/v_electron;
-			//printf("w/gv = %e + I*%e\n", creal(e_w_gv), cimag(e_w_gv));
-
-			symX = symY = symZ = symR = false; // symmetry is unlikely to happen
-			if (IFROOT) sprintf(beam_descr,"electron with energy %g keV in host medium with m_host=%g moving through (%g,%g,0)",e_energy,creal(m_host),COMP3V(beam_center_0));
-			return;
 		case B_READ:
 			// the safest is to assume cancellation of all symmetries
 			symX=symY=symZ=symR=false;
-			if (surface) inc_scale=1; // since we can't know it, we assume the default case
 			if (IFROOT) {
 				if (beam_Npars==1) sprintf(beam_descr,"specified by file '%s'",beam_fnameY);
 				else sprintf(beam_descr,"specified by files '%s' and '%s'",beam_fnameY,beam_fnameX);
@@ -253,9 +196,8 @@ void InitBeam(void)
 	 *    source files)
 	 * 2) test all input parameters (for that you're encouraged to use functions from param.h since they would
 	 *    automatically produce informative output in case of error).
-	 * 3) the symmetry breaking due to prop or beam_center is taken care of in VariablesInterconnect() in param.c.
-	 *    But if there are other reasons why beam would break any symmetry, corresponding variable should be set to
-	 *    false here. Do not set any of them to true, as they can be set to false by other factors.
+	 * 3) if shape breaks any symmetry, corresponding variable should be set to false. Do not set any of them to true,
+	 *    as they can be set to false by other factors.
 	 *    symX, symY, symZ - symmetries of reflection over planes YZ, XZ, XY respectively.
 	 *    symR - symmetry of rotation for 90 degrees over the Z axis
 	 * 4) initialize the following:
@@ -264,7 +206,7 @@ void InitBeam(void)
 	 *                set also beam_center_0 - 3D radius-vector of beam center in the laboratory reference frame (it
 	 *                will be then automatically transformed to particle reference frame, if required).
 	 * 5) Consider the case of surface (substrate near the particle). If the new beam type is incompatible with it, add
-	 *    an explicit exception, like "if (surface) PrintErrorHelp(...);". Otherwise, you also need to define inc_scale.
+	 *    an explicit exception, like "if (surface) PrintErrorHelp(...);".
 	 * All other auxiliary variables, which are used in beam generation (GenerateB(), see below), should be defined in
 	 * the beginning of this file. If you need temporary local variables (which are used only in this part of the code),
 	 * define them in the beginning of this function.
@@ -280,14 +222,13 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 	size_t i,j;
 	doublecomplex psi0,Q,Q2;
 	doublecomplex v1[3],v2[3],v3[3],gt[6];
-	double ro,ro2,ro4;
+	double ro2,ro4;
 	double x,y,z,x2_s,xy_s;
-	doublecomplex t1,t2,t3,t4,t5,t6,t7,t8,ctemp, e_wb_gv;
+	doublecomplex t1,t2,t3,t4,t5,t6,t7,t8,ctemp;
 	const double *ex; // coordinate axis of the beam reference frame
 	double ey[3];
 	double r1[3];
 	const char *fname;
-
 	/* TO ADD NEW BEAM
 	 * Add here all intermediate variables, which are used only inside this function. You may as well use 't1'-'t8'
 	 * variables defined above.
@@ -307,11 +248,10 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 		case B_PLANE: // plane is separate to be fast (for non-surface)
 			if (surface) {
 				/* With respect to normalization we use here the same assumption as in the free space - the origin is in
-				 * the particle center, and amplitude of incoming plane wave is equal to 1. Then irradiance of the beam
-				 * coming from below is c*Re(msub)/(8pi), different from that coming from above.
-				 * Original incident (incoming) beam propagating from the vacuum (above) is Exp(i*k*r.a), while - from
-				 * the substrate (below) is Exp(i*k*msub*r.a). We assume that the incoming beam is homogeneous in its
-				 * original medium.
+				 * the particle center, and beam irradiance is equal to that of a unity-amplitude field in the vacuum
+				 * (i.e. 1/8pi in CGS). Thus, original incident beam propagating from the vacuum (above) is
+				 * Exp(i*k*r.a), while - from the substrate (below) is Exp(i*k*msub*r.a)/sqrt(Re(msub)). We assume that
+				 * the incident beam is homogeneous in its original medium.
 				 */
 				doublecomplex rc,tc; // reflection and transmission coefficients
 				if (prop[2]>0) { // beam comes from the substrate (below)
@@ -329,8 +269,8 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 						tc=FresnelTP(ki,kt,1/msub);
 					}
 					// phase shift due to the origin at height hsub
-					cvMultScal_cmplx(rc*cexp(-2*I*WaveNum*ki*hsub),eIncRefl,eIncRefl);
-					cvMultScal_cmplx(tc*cexp(I*WaveNum*(kt-ki)*hsub),eIncTran,eIncTran);
+					cvMultScal_cmplx(rc*cexp(-2*I*WaveNum*ki*hsub)/sqrt(creal(msub)),eIncRefl,eIncRefl);
+					cvMultScal_cmplx(tc*cexp(I*WaveNum*(kt-ki)*hsub)/sqrt(creal(msub)),eIncTran,eIncTran);
 					// main part
 					for (i=0;i<local_nvoid_Ndip;i++) {
 						j=3*i;
@@ -342,10 +282,7 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 					// determine amplitude of the reflected and transmitted waves
 					if (which==INCPOL_Y) { // s-polarized
 						cvBuildRe(ex,eIncRefl);
-						if (msubInf) {
-							rc=-1;
-							tc=0; // to remove compiler warnings
-						}
+						if (msubInf) rc=-1;
 						else {
 							cvBuildRe(ex,eIncTran);
 							rc=FresnelRS(ki,kt);
@@ -354,10 +291,7 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 					}
 					else { // p-polarized
 						vInvRefl_cr(ex,eIncRefl);
-						if (msubInf) {
-							rc=1;
-							tc=0; // to remove compiler warnings
-						}
+						if (msubInf) rc=1;
 						else {
 							crCrossProd(ey,ktVec,eIncTran);
 							cvMultScal_cmplx(1/msub,eIncTran,eIncTran); // normalize eIncTran by ||ktVec||=msub
@@ -383,18 +317,16 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 				cvMultScal_RVec(ctemp,ex,b+j); // b[i]=ctemp*ex
 			}
 			return;
-		case B_DIPOLE: {
-			double dip_p[3]; // dipole moment, = p0*prop
-			vMultScal(p0,prop,dip_p);
-			for (i=0;i<local_nvoid_Ndip;i++) { // here we explicitly use that dip_p is real
+		case B_DIPOLE:
+			for (i=0;i<local_nvoid_Ndip;i++) { // here we explicitly use that dipole moment (prop) is real
 				j=3*i;
 				LinComb(DipoleCoord+j,beam_center,1,-1,r1);
 				(*InterTerm_real)(r1,gt);
-				cSymMatrVecReal(gt,dip_p,b+j);
+				cSymMatrVecReal(gt,prop,b+j);
 				if (surface) { // add reflected field
 					r1[2]=DipoleCoord[j+2]+beam_center[2]+2*hsub;
 					(*ReflTerm_real)(r1,gt);
-					cReflMatrVecReal(gt,dip_p,v1);
+					cReflMatrVecReal(gt,prop,v1);
 					cvAdd(v1,b+j,b+j);
 				}
 			}
@@ -405,25 +337,25 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 			 * correct for most formulations, e.g. poi, fcd, fcd_st, igt_so. Moreover, it is also logical, since the
 			 * exciting dipole is really point one, in contrast to the dipoles composing the particle.
 			 */
-			double temp=p0*WaveNum*WaveNum; // in principle, t1=1/k, but we keep a general formula
-			C0dipole=2*FOUR_PI_OVER_THREE*temp*temp;
+			C0dipole=2*FOUR_PI_OVER_THREE*WaveNum*WaveNum*WaveNum*WaveNum;
+			printf("C0=%g\n",C0dipole);
 			if (surface) {
 				r1[0]=r1[1]=0;
 				r1[2]=2*(beam_center[2]+hsub);
 				(*ReflTerm_real)(r1,gt);
 				double tmp;
-				/* the following expression uses that dip_p is real and a specific (anti-)symmetry of the gt
+				/* the following expression uses that prop is real and a specific (anti-)symmetry of the gt
 				 * a general expression is commented out below
 				 */
-				tmp=dip_p[0]*dip_p[0]*cimag(gt[0])+2*dip_p[0]*dip_p[1]*cimag(gt[1])+dip_p[1]*dip_p[1]*cimag(gt[3])
-				   +dip_p[2]*dip_p[2]*cimag(gt[5]);
-//				v1[0]=dip_p[0]; v1[1]=dip_p[1]; v1[2]=dip_p[2];
+				tmp=prop[0]*prop[0]*cimag(gt[0])+2*prop[0]*prop[1]*cimag(gt[1])+prop[1]*prop[1]*cimag(gt[3])
+				   +prop[2]*prop[2]*cimag(gt[5]);
+//				v1[0]=prop[0]; v1[1]=prop[1]; v1[2]=prop[2];
 //				cReflMatrVec(gt,v1,v2);
 //				tmp=cDotProd_Im(v2,v1);
 				C0dipole_refl=FOUR_PI*WaveNum*tmp;
+				printf("C0refl=%g\n",C0dipole_refl);
 			}
 			return;
-		}
 		case B_LMINUS:
 		case B_DAVIS3:
 		case B_BARTON5:
@@ -442,12 +374,7 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 				// the following logic (if-else-if...) is hard to replace by a simple switch
 				if (beamtype==B_LMINUS) cvMultScal_RVec(ctemp,ex,b+j); // b[i]=ctemp*ex
 				else {
-					/* It is possible to rewrite the formulae below to avoid division by ro2, but we prefer
-					 * dimensionless variables. The value for ro2=0 doesn't really matter (cancels afterwards).
-					 * The current code should work OK even for very small ro2
-					 */
-					if (ro2==0) x2_s=0;
-					else x2_s=x*x/ro2;
+					x2_s=x*x/ro2;
 					Q2=Q*Q;
 					ro4=ro2*ro2;
 					// some combinations that are used more than once
@@ -464,8 +391,7 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 						t3 = 2*t7*(-1 + I*Q*s2*(-4*t5+t6-2));
 					}
 					else if (beamtype==B_BARTON5) {
-						if (ro2==0) xy_s=0; // see comment for x2_s above
-						else xy_s=x*y/ro2;
+						xy_s=x*y/ro2;
 						t8=8+2*t5; // t8=8+2i*Q*ro^2
 						/* t1 = 1 + s^2(-ro^2*Q^2-i*ro^4*Q^3-2Q^2*x^2)
 						 *    + s^4[2ro^4*Q^4+3iro^6*Q^5-0.5ro^8*Q^6+x^2(8ro^2*Q^4+2iro^4*Q^5)]
@@ -489,55 +415,6 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 				}
 			}
 			return;
-		case B_ELECTRON:
-			ex=incPolX;
-			vCopy(incPolY,ey);
-			for (i=0;i<local_nvoid_Ndip;i++) {
-				j=3*i;
-				// set relative coordinates (in beam's coordinate system)
-				LinComb(DipoleCoord+j,beam_center,1,-1,r1);
-				//x = DipoleCoord[j + 0];
-				//y = DipoleCoord[j + 1];
-				//z = DipoleCoord[j + 2];
-				//printf("x y z: %e %e %e\n", x, y, z);
-				//printf("r1 = (%e,%e,%e)\n", r1[0], r1[1], r1[2]);
-
-				x=DotProd(r1,ex)*scale_z; //cm
-				y=DotProd(r1,ey)*scale_z; //cm
-				z=DotProd(r1,prop)*scale_z; //cm
-				//printf("x y z: %e %e %e\n", x, y, z);
-				ro=sqrt(x*x+y*y); //cm
-				//printf("ro = %e\n", ro);
-
-				//printf("ex=(%e,%e,%e)\n", ex[0], ex[1], ex[2]);
-				//printf("ey=(%e,%e,%e)\n", ey[0], ey[1], ey[2]);
-				//LogError(ONE_POS,"x y z: %e %e %e\n", x, y, z);
-				if (ro < DBL_EPSILON) LogError(ONE_POS,"electron hit a dipole, this is currently not supported, ro = %e", ro);
-
-				e_wb_gv = e_w_gv*ro;
-				//printf("w = %e\n", omega);
-				//printf("b = %e\n", ro);
-				//printf("g = %e\n", creal(gamma_eps), cimag(gamma_eps));
-				//printf("v = %e\n", v_electron);
-				//printf("wb/gv = %e + I*%e\n", creal(e_wb_gv), cimag(e_wb_gv));
-
-				cik01_(&e_wb_gv, &t1, &t1, &t1, &t1, &t7, &t1, &t8, &t1);
-				//printf("BesselK(1,wb/gv) = %e + I*%e\n", creal(t8), cimag(t8));
-				//printf("BesselK(0,wb/gv) = %e + I*%e\n", creal(t7), cimag(t7));
-
-				t4 = imExp(e_w_v*z);
-				v1[0] = (x/ro)*t4*t8; //E_inc_x
-				v1[1] = (y/ro)*t4*t8; //E_inc_y
-				v1[2] = (-I)*gamma_eps_inv*t4*t7; //E_inc_z
-				cvMultScal_cmplx(e_inc_pr,v1,b+j);
-
-				t4 = imExp(-e_w_v*z);
-				v1[0] = -(x/ro)*t4*t8; //E_1_x
-				v1[1] = -(y/ro)*t4*t8; //E_1_y
-				v1[2] = (-I)*gamma_eps_inv*t4*t7; //E_1_z
-				cvMultScal_cmplx(e_inc_pr,v1,E1+j);
-			}
-			return;
 		case B_READ:
 			if (which==INCPOL_Y) fname=beam_fnameY;
 			else fname=beam_fnameX; // which==INCPOL_X
@@ -549,11 +426,11 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 	 * add a case above. Identifier ('B_...') should be defined inside 'enum beam' in const.h. This case should set
 	 * complex vector 'b', describing the incident field in the particle reference frame. It is set inside the cycle for
 	 * each dipole of the particle and is calculated using
-	 * 1) 'DipoleCoord' ï¿½ array of dipole coordinates;
-	 * 2) 'prop' ï¿½ propagation direction of the incident field;
-	 * 3) 'ex' ï¿½ direction of incident polarization;
-	 * 4) 'ey' ï¿½ complementary unity vector of polarization (orthogonal to both 'prop' and 'ex');
-	 * 5) 'beam_center' ï¿½ beam center in the particle reference frame (automatically calculated from 'beam_center_0'
+	 * 1) 'DipoleCoord' – array of dipole coordinates;
+	 * 2) 'prop' – propagation direction of the incident field;
+	 * 3) 'ex' – direction of incident polarization;
+	 * 4) 'ey' – complementary unity vector of polarization (orthogonal to both 'prop' and 'ex');
+	 * 5) 'beam_center' – beam center in the particle reference frame (automatically calculated from 'beam_center_0'
 	 *                    defined in InitBeam).
 	 * If the new beam type is compatible with '-surf', include here the corresponding code. For that you will need
 	 * the variables, related to surface - see vars.c after "// related to a nearby surface".

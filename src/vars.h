@@ -5,7 +5,7 @@
  *        'Global' means used in three or more source files. Variables that are used in only two source files are called
  *        'semi-global' and not listed here. They are defined in one file and referenced with 'extern' in another one.
  *
- * Copyright (C) 2006-2014 ADDA contributors
+ * Copyright (C) 2006-2013 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
@@ -30,10 +30,10 @@
 #include <time.h>    // for time_t
 
 // basic variables
+
 extern int boxX,boxY,boxZ;
 extern size_t boxXY;
-extern double gridspace,gridSpaceX,gridSpaceY,gridSpaceZ,rectScaleX,rectScaleY,rectScaleZ,maxRectScale,dipvol,kd,
-	ka_eq,inv_G,WaveNum;
+extern double gridspace,dipvol,kd,ka_eq,inv_G,WaveNum;
 extern double * restrict DipoleCoord;
 
 extern double memory,memPeak;
@@ -46,7 +46,7 @@ extern bool symX,symY,symZ,symR;
 
 // flags
 extern bool prognosis,yzplane,scat_plane,store_mueller,all_dir,scat_grid,phi_integr,sh_granul,reduced_FFT,orient_avg,
-	load_chpoint,beam_asym,anisotropy,save_memory,ipr_required,rectDip;
+	load_chpoint,beam_asym,anisotropy,save_memory,ipr_required;
 extern double propAlongZ;
 
 // 3D vectors
@@ -67,7 +67,7 @@ extern unsigned char * restrict material;
 // iterative solver
 extern enum iter IterMethod;
 extern int maxiter;
-extern doublecomplex *xvec,*pvec,* restrict Einc,* restrict E1;
+extern doublecomplex *xvec,*pvec,* restrict Einc;
 
 // scattering at different angles
 extern int nTheta;
@@ -81,15 +81,16 @@ extern int nprocs,ringid;
 extern size_t local_Ndip,local_nvoid_Ndip,local_nRows,local_nvoid_d0,local_nvoid_d1,nvoid_Ndip;
 
 // timing
+extern time_t wt_start,last_chp_wt;
 extern TIME_TYPE Timing_EField,Timing_FileIO,Timing_Integration,tstart_main;
 
 // related to a nearby surface
 extern bool surface,msubInf;
 extern enum refl ReflRelation;
 extern doublecomplex msub;
-extern double inc_scale,hsub,prIncRefl[3],prIncTran[3];
+extern double hsub,prIncRefl[3],prIncTran[3];
 
-#ifndef SPARSE // These variables are exclusive to the FFT mode
+#ifndef SPARSE //These variables are exclusive to the FFT mode
 
 extern unsigned short * restrict position;
 
@@ -103,11 +104,11 @@ extern size_t local_Nsmall;
 extern int local_z0,local_z1,local_z1_coer,local_Nz_unif;
 extern size_t local_Nz,local_x0,local_x1,local_Nx;
 
-#else // These variables are exclusive to the sparse mode
+#else //These variables are exclusive to the sparse mode
 
 extern int *position;
 extern int * restrict position_full;
 
-#endif // !SPARSE
+#endif //SPARSE
 
 #endif // __vars_h

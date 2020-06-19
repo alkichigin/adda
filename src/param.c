@@ -3,7 +3,7 @@
  * Descr: initialization, parsing and handling of input parameters; also printout general information; contains file
  *        locking routines
  *
- * Copyright (C) 2006-2014 ADDA contributors
+ * Copyright (C) 2006-2013 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
@@ -39,22 +39,13 @@
 #include <time.h>
 
 #ifdef CLFFT_AMD
-/* One can also include clFFT.h (the only recommended public header), which can be redundant, but more portable.
- * However, version macros are not documented anyway (in the manual), so there seem to be no perfectly portable way to
- * obtain them.
- */
-#	include <clFFT.version.h>
+	IGNORE_WARNING(-Wstrict-prototypes) // no way to change the library header
+#	include <clAmdFft.h> // for version information
+	STOP_IGNORE
 #endif
 
-#ifdef OCL_BLAS
-/* In contrast to clFFT, here including main header (clBLAS.h) is not an option, since it doesn't include the
- * following header.
- */
-#	include <clBLAS.version.h>
-#endif
-
-#ifndef NO_GITHASH
-#	include "githash.h" // for GITHASH, this file is automatically created during compilation
+#ifndef NO_SVNREV
+#	include "svnrev.h" // for SVNREV, this file is automatically created during compilation
 #endif
 
 // definitions for file locking
@@ -106,18 +97,17 @@ bool store_scat_grid; // Store the scattered field for grid of angles
 bool calc_Cext;       // Calculate the extinction cross-section - always do
 bool calc_Cabs;       // Calculate the absorption cross-section - always do
 bool calc_Csca;       // Calculate the scattering cross-section by integration
-bool calc_Peels;       // Calculate the EELS probability
 bool calc_vec;        // Calculate the unnormalized asymmetry-parameter
 bool calc_asym;       // Calculate the asymmetry-parameter
 bool calc_mat_force;  // Calculate the scattering force by matrix-evaluation
 bool store_force;     // Write radiation pressure per dipole to file
 bool store_ampl;      // Write amplitude matrix to file
-int phi_int_type;     // type of phi integration (each bit determines whether to calculate with different multipliers)
+int phi_int_type; // type of phi integration (each bit determines whether to calculate with different multipliers)
 // used in calculator.c
-bool avg_inc_pol;            // whether to average CC over incident polarization
-double polNlocRp;            // Gaussian width for non-local polarizability
-const char *alldir_parms;    // name of file with alldir parameters
-const char *scat_grid_parms; // name of file with parameters of scattering grid
+bool avg_inc_pol;                 // whether to average CC over incident polarization
+double polNlocRp;                 // Gaussian width for non-local polarizability
+const char *alldir_parms;         // name of file with alldir parameters
+const char *scat_grid_parms;      // name of file with parameters of scattering grid
 // used in crosssec.c
 double incPolX_0[3],incPolY_0[3]; // initial incident polarizations (in lab RF)
 enum scat ScatRelation;           // type of formulae for scattering quantities
@@ -175,12 +165,12 @@ static int Nmat_given;          // number of refractive indices given in the com
 static enum sym sym_type;       // how to treat particle symmetries
 /* The following '..._used' flags are, in principle, redundant, since the structure 'options' contains the same flags.
  * However, the latter can't be easily addressed by the option name (a search over the whole options is required).
- * When thinking about adding a new one, first consider using UNDEF machinery instead
  */
 static bool prop_used;          // whether '-prop ...' was used in the command line
 static bool orient_used;        // whether '-orient ...' was used in the command line
 static bool yz_used;            // whether '-yz ...' was used in the command line
 static bool scat_plane_used;    // whether '-scat_plane ...' was used in the command line
+static bool int_surf_used;      // whether '-int_surf ...' was used in the command line
 
 /* TO ADD NEW COMMAND LINE OPTION
  * If you need new variables or flags to implement effect of the new command line option, define them here. If a
@@ -219,11 +209,6 @@ static const char exeusage[]="[-<opt1> [<args1>] [-<opt2> <args2>]...]]";
  * to be the easiest.
  */
 static const struct subopt_struct beam_opt[]={
-	{"electron","<energy> <x> <y> <m_host_re>","Field of an electron with energy <energy> moving along z-axis through "
-		"point (<x>,<y>,0) (in laboratory reference frame) in the host medium with real refractive index "
-		"<m_host_re>. Energy argument is in keV, all coordinate arguments are in um. Orientation of "
-		"the beam is determined by -prop command line option. Implies '-scat_matr none'. Currently does not "
-		"support '-surf'.",4,B_ELECTRON},
 	{"barton5","<width> [<x> <y> <z>]","5th order approximation of the Gaussian beam (by Barton). The beam width is "
 		"obligatory and x, y, z coordinates of the center of the beam (in laboratory reference frame) are optional "
 		"(zero, by default). All arguments are in um. This is recommended option for simulation of the Gaussian beam.",
@@ -373,7 +358,6 @@ PARSE_FUNC(pol);
 PARSE_FUNC(prognosis);
 PARSE_FUNC(prop);
 PARSE_FUNC(recalc_resid);
-PARSE_FUNC(rect_dip);
 #ifndef SPARSE
 PARSE_FUNC(save_geom);
 #endif
@@ -429,7 +413,7 @@ static struct opt_struct options[]={
 	{PAR(Csca),"","Calculate scattering cross section (by integrating the scattered field)",0,NULL},
 	{PAR(dir),"<dirname>","Sets directory for output files.\n"
 		"Default: constructed automatically",1,NULL},
-	{PAR(dpl),"<arg>","Sets parameter 'dipoles per lambda' (along the x-axis), float.\n"
+	{PAR(dpl),"<arg>","Sets parameter 'dipoles per lambda', float.\n"
 		"Default: 10|m|, where |m| is the maximum of all given refractive indices.",1,NULL},
 	{PAR(eps),"<arg>","Specifies the stopping criterion for the iterative solver by setting the relative norm of the "
 		"residual 'epsilon' to reach. <arg> is an exponent of base 10 (float), i.e. epsilon=10^(-<arg>).\n"
@@ -450,7 +434,7 @@ static struct opt_struct options[]={
 		"given by the last optional argument. Algorithm may fail for volume fractions > 30-50%.\n"
 		"Default <dom_number>: 1",UNDEF,NULL},
 #endif // !SPARSE
-	{PAR(grid),"<nx> [<ny> <nz>]","Sets dimensions of the computation grid (any positive integers). In most "
+	{PAR(grid),"<nx> [<ny> <nz>]","Sets dimensions of the computation grid. Arguments should be even integers. In most "
 		"cases <ny> and <nz> can be omitted (they are automatically determined by <nx> based on the proportions of the "
 		"scatterer). This command line option is not relevant when particle geometry is read from a file ('-shape "
 		"read'). If '-jagged' option is used the grid dimension is effectively multiplied by the specified number.\n"
@@ -475,21 +459,20 @@ static struct opt_struct options[]={
 #endif
 		"'zero' is a zero vector,\n"
 		"Default: auto",UNDEF,NULL},
-	{PAR(int),"{fcd|fcd_st|igt [<lim> [<prec>]]|igt_so|nloc <Rp>|nloc_av <Rp>|poi|so}",
+	{PAR(int),"{fcd|fcd_st|igt [<lim> [<prec>]]|igt_so|nloc <Rp>|nloc0 <Rp>|poi|so}",
 		"Sets prescription to calculate the interaction term.\n"
 		"'fcd' - Filtered Coupled Dipoles - requires dpl to be larger than 2.\n"
 		"'fcd_st' - static (long-wavelength limit) version of FCD.\n"
-		"'igt' - Integration of Green's Tensor. Its parameters are: <lim> - maximum distance (in largest dipole "
-		"dimensions), for which integration is used, (default: infinity); <prec> - minus decimal logarithm of relative "
-		"error of the integration, i.e. epsilon=10^(-<prec>) (default: the same as the argument (or default value) of "
-		"'-eps' command line option).\n"
+		"'igt' - Integration of Green's Tensor. Its parameters are: <lim> - maximum distance (in dipole sizes), for "
+		"which integration is used, (default: infinity); <prec> - minus decimal logarithm of relative error of the "
+		"integration, i.e. epsilon=10^(-<prec>) (default: same as argument of '-eps' command line option).\n"
 #ifdef NO_FORTRAN
 		"!!! 'igt' relies on Fortran sources that were disabled at compile time.\n"
 #endif
 		"'igt_so' - approximate evaluation of IGT using second order of kd approximation.\n"
-		"'nloc' - non-local interaction of two Gaussian dipole densities (based on point value of Gh), <Rp> is the "
+		"'nloc' - non-local interaction of two Gaussian dipole densities (averaged over the cube volume), <Rp> is the "
 		"width of the latter in um (must be non-negative).\n"
-		"'nloc_av' - same as 'nloc' but based on averaging over the cube volume.\n"
+		"'nloc0' - same as 'nloc' but based on point value of Gh.\n"
 		"'poi' - (the simplest) interaction between point dipoles.\n"
 		"'so' - under development and incompatible with '-anisotr'.\n"
 #ifdef SPARSE
@@ -562,7 +545,7 @@ static struct opt_struct options[]={
 		"respectively.\n"
 		"Examples: 1 (one integration with no multipliers),\n"
 		"          6 (two integration with cos(2*phi) and sin(2*phi) multipliers).",1,NULL},
-	{PAR(pol),"{cldr|cm|dgf|fcd|igt_so|lak|ldr [avgpol]|nloc <Rp>|nloc_av <Rp>|rrc|so}",
+	{PAR(pol),"{cldr|cm|dgf|fcd|igt_so|lak|ldr [avgpol]|nloc <Rp>|nloc0 <Rp>|rrc|so}",
 		"Sets prescription to calculate the dipole polarizability.\n"
 		"'cldr' - Corrected LDR (see below), incompatible with '-anisotr'.\n"
 		"'cm' - (the simplest) Clausius-Mossotti.\n"
@@ -572,12 +555,11 @@ static struct opt_struct options[]={
 		"'lak' - (by Lakhtakia) exact integration of Green's Tensor over a sphere.\n"
 		"'ldr' - Lattice Dispersion Relation, optional flag 'avgpol' can be added to average polarizability over "
 		"incident polarizations.\n"
-		"'nloc' - non-local (Gaussian dipole density, based on lattice sums), <Rp> is the width of the latter in um "
-		"(must be non-negative).\n"
-		"'nloc_av' - same as 'nloc' but based on averaging of Gh over the dipole volume.\n"
+		"'nloc' - non-local (Gaussian dipole density), <Rp> is the width of the latter in um (must be non-negative).\n"
+		"'nloc0' - same as 'nloc' but based on lattice sums of Gh.\n"
 		"'rrc' - Radiative Reaction Correction (added to CM).\n"
 		"'so' - under development and incompatible with '-anisotr'.\n"
-		"Default: ldr (without averaging) or cldr (for -rect_dip).",UNDEF,NULL},
+		"Default: ldr (without averaging).",UNDEF,NULL},
 		/* TO ADD NEW POLARIZABILITY FORMULATION
 		 * Modify string constants after 'PAR(pol)': add new argument (possibly with additional sub-arguments) to list
 		 * {...} and its description to the next string.
@@ -588,9 +570,6 @@ static struct opt_struct options[]={
 		"vector) is performed automatically. For point-dipole incident beam this determines its direction.\n"
 		"Default: 0 0 1",3,NULL},
 	{PAR(recalc_resid),"","Recalculate residual at the end of iterative solver.",0,NULL},
-	{PAR(rect_dip),"<x> <y> <z>","Use rectangular-cuboid dipoles. Three arguments are the relative dipole sizes along "
-		"the corresponding axes. Absolute scale is not relevant, i.e. '1 2 2' is equivalent to '0.5 1 1'.\n"
-		"Default: 1 1 1",3,NULL},
 #ifndef SPARSE
 	{PAR(save_geom),"[<filename>]","Save dipole configuration to a file <filename> (a path relative to the output "
 		"directory). Can be used with '-prognosis'.\n"
@@ -1089,7 +1068,7 @@ PARSE_FUNC(grid)
 		ScanIntError(argv[2],&boxY);
 		TestRange_i(boxY,"gridY",1,BOX_MAX);
 		ScanIntError(argv[3],&boxZ);
-		TestRange_i(boxZ,"gridZ",1,BOX_MAX);
+		TestRange_i(boxY,"gridY",1,BOX_MAX);
 	}
 }
 PARSE_FUNC(h)
@@ -1207,9 +1186,9 @@ PARSE_FUNC(int)
 		TestNonNegative(nloc_Rp,"Gaussian width");
 		noExtraArgs=false;
 	}
-	else if (strcmp(argv[1],"nloc_av")==0) {
-		IntRelation=G_NLOC_AV;
-		if (Narg!=2) NargErrorSub(Narg,"int nloc_av","1");
+	else if (strcmp(argv[1],"nloc0")==0) {
+		IntRelation=G_NLOC0;
+		if (Narg!=2) NargErrorSub(Narg,"int nloc0","1");
 		ScanDoubleError(argv[2],&nloc_Rp);
 		TestNonNegative(nloc_Rp,"Gaussian width");
 		noExtraArgs=false;
@@ -1230,6 +1209,7 @@ PARSE_FUNC(int_surf)
 	if (strcmp(argv[1],"img")==0) ReflRelation=GR_IMG;
 	else if (strcmp(argv[1],"som")==0) ReflRelation=GR_SOM;
 	else NotSupported("Interaction term prescription",argv[1]);
+	int_surf_used=true;
 	/* TO ADD NEW REFLECTION FORMULATION
 	 * add the line to else-if sequence above in the alphabetical order, analogous to the ones already present. The
 	 * variable parts of the line are its name used in command line and its descriptor, defined in const.h.
@@ -1267,7 +1247,7 @@ PARSE_FUNC(m)
 	int i;
 	double mre,mim;
 
-	if (IS_ODD(Narg) || Narg==0) NargError(Narg,"even");
+	if (!IS_EVEN(Narg) || Narg==0) NargError(Narg,"even");
 	Nmat=Nmat_given=Narg/2;
 	if (Nmat>MAX_NMAT) PrintErrorHelp("Too many materials (%d), maximum %d are supported. You may increase parameter "
 		"MAX_NMAT in const.h and recompile.",Nmat,MAX_NMAT);
@@ -1356,9 +1336,9 @@ PARSE_FUNC(pol)
 		TestNonNegative(polNlocRp,"Gaussian width");
 		noExtraArgs=false;
 	}
-	else if (strcmp(argv[1],"nloc_av")==0) {
-		PolRelation=POL_NLOC_AV;
-		if (Narg!=2) NargErrorSub(Narg,"pol nloc_av","1");
+	else if (strcmp(argv[1],"nloc0")==0) {
+		PolRelation=POL_NLOC0;
+		if (Narg!=2) NargErrorSub(Narg,"pol nloc0","1");
 		ScanDoubleError(argv[2],&polNlocRp);
 		TestNonNegative(polNlocRp,"Gaussian width");
 		noExtraArgs=false;
@@ -1394,17 +1374,6 @@ PARSE_FUNC(prop)
 PARSE_FUNC(recalc_resid)
 {
 	recalc_resid=true;
-}
-PARSE_FUNC(rect_dip)
-{
-	ScanDoubleError(argv[1],&rectScaleX);
-	ScanDoubleError(argv[2],&rectScaleY);
-	ScanDoubleError(argv[3],&rectScaleZ);
-	TestPositive(rectScaleX,"x-scale of rectangular dipole");
-	TestPositive(rectScaleY,"y-scale of rectangular dipole");
-	TestPositive(rectScaleZ,"z-scale of rectangular dipole");
-	rectDip=true;
-	if (rectScaleX!=rectScaleY) symR=false;
 }
 #ifndef SPARSE
 PARSE_FUNC(save_geom)
@@ -1560,7 +1529,7 @@ PARSE_FUNC(test)
 }
 PARSE_FUNC(V)
 {
-	char copyright[]="\n\nCopyright (C) 2006-2020 ADDA contributors\n"
+	char copyright[]="\n\nCopyright (C) 2006-2013 ADDA contributors\n"
 		"This program is free software; you can redistribute it and/or modify it under the terms of the GNU General "
 		"Public License as published by the Free Software Foundation; either version 3 of the License, or (at your "
 		"option) any later version.\n\n"
@@ -1622,8 +1591,8 @@ PARSE_FUNC(V)
 #	define COMPILER "unknown"
 #endif
 		// print version, MPI standard, type and compiler information, bit-mode
-#ifdef GITHASH // git hash is printed if available, but only here
-		printf("ADDA v."ADDA_VERSION" ("GITHASH")\n");
+#ifdef SVNREV // revision number is printed if available, but only here
+		printf("ADDA v."ADDA_VERSION" (r"SVNREV")\n");
 #else
 		printf("ADDA v."ADDA_VERSION"\n");
 #endif
@@ -1639,15 +1608,11 @@ PARSE_FUNC(V)
 #	endif
 		printf("GPU-accelerated version conforming to OpenCL standard "OCL_VERSION"\n");
 #	ifdef CLFFT_AMD
-		printf("Linked to clFFT version %d.%d.%d\n",clfftVersionMajor,clfftVersionMinor,clfftVersionPatch);
-#	endif
-#	ifdef OCL_BLAS
-		printf("Linked to clBLAS version %d.%d.%d\n",clblasVersionMajor,clblasVersionMinor,
-			clblasVersionPatch);
+		printf("Linked to clAmdFft version %d.%d.%d\n",clAmdFftVersionMajor,clAmdFftVersionMinor,clAmdFftVersionPatch);
 #	endif
 #elif defined(ADDA_MPI)
 		// Version of MPI standard is specified
-		printf("Parallel version conforming to MPI standard %d.%d\n",RUN_MPI_VER_REQ,RUN_MPI_SUBVER_REQ);
+		printf("Parallel version conforming to MPI standard %d.%d\n",MPI_VERSION,MPI_SUBVERSION);
 #	ifdef MPICH2
 		printf("Linked to MPICH2 version "MPICH2_VERSION"\n");
 #	elif defined(OPEN_MPI)
@@ -1660,7 +1625,7 @@ PARSE_FUNC(V)
 #	ifndef SUPPORT_MPI_COMPLEX
 		D("No support for complex MPI datatypes (emulated)");
 #	else
-#		ifndef SUPPORT_MPI_COMPLEX_REDUCE
+#		ifndef SUPPORT_MPI_COMPLEX
 		D("Complex MPI datatypes are supported, but their use in reduce operations is not supported (emulated)");
 #		endif
 #	endif
@@ -1681,7 +1646,7 @@ PARSE_FUNC(V)
 #elif defined(__MINGW32_VERSION)
 		printf("      using MinGW-32 environment version %g\n",__MINGW32_VERSION);
 #endif
-		// extra build flags - can it be shortened by some clever defines?
+		// extra build flags
 		const char build_opts[]=
 #ifdef DEBUGFULL
 		"DEBUGFULL, "
@@ -1719,12 +1684,6 @@ PARSE_FUNC(V)
 #endif
 #ifdef USE_SSE3
 		"USE_SSE3, "
-#endif
-#ifdef OCL_BLAS
-		"OCL_BLAS, "
-#endif
-#ifdef NO_GITHASH
-		"NO_GITHASH, "
 #endif
 		"";
 		printf("Extra build options: ");
@@ -1845,21 +1804,9 @@ static void RemoveLockFile(FILEHANDLE fd ONLY_FOR_LOCK,const char * restrict fna
 
 //======================================================================================================================
 
-static void UpdateSymVec(const double a[static 3])
-// tests whether vector a satisfies a number of symmetries (with round-off errors) and cancels the failing symmetries
-{
-	if (fabs(a[0])>ROUND_ERR) symX=false;
-	if (fabs(a[1])>ROUND_ERR) symY=false;
-	if (fabs(a[2])>ROUND_ERR) symZ=false;
-	if (!vAlongZ(a)) symR=false;
-}
-
-//======================================================================================================================
-
 void InitVariables(void)
 // some defaults are specified also in const.h
 {
-	rectDip=false;
 	prop_used=false;
 	orient_used=false;
 	directory="";
@@ -1880,7 +1827,7 @@ void InitVariables(void)
 	shapename="sphere";
 	store_int_field=false;
 	store_dip_pol=false;
-	PolRelation=UNDEF;
+	PolRelation=POL_LDR;
 	avg_inc_pol=false;
 	ScatRelation=SQ_DRAINE;
 	IntRelation=G_POINT_DIP;
@@ -1913,7 +1860,6 @@ void InitVariables(void)
 	calc_Cext=true;
 	calc_Cabs=true;
 	calc_Csca=false;
-	calc_Peels=true;
 	calc_vec=false;
 	calc_asym=false;
 	calc_mat_force=false;
@@ -1936,15 +1882,10 @@ void InitVariables(void)
 	recalc_resid=false;
 	surface=false;
 	msubInf=false;
-	ReflRelation=UNDEF;
+	int_surf_used=false;
 	// sometimes the following two are left uninitialized
 	beam_fnameX=NULL;
 	infi_fnameX=NULL;
-	rectScaleX=1.0;
-	rectScaleY=1.0;
-	rectScaleZ=1.0;
-	maxRectScale=1;
-
 #ifdef OPENCL
 	gpuInd=0;
 #endif
@@ -2017,11 +1958,11 @@ void VariablesInterconnect(void)
 		prop_0[2]=1;
 	}
 	// parameter interconnections
-	if (IntRelation==G_SO) {
-		reduced_FFT=false;
-		// this limitation is due to assumption of reciprocity in DecayCross()
-		if (beamtype==B_DIPOLE) PrintError("'-beam dipole' and '-int so' can not be used together");
-	}
+	/* very unlikely that calc_Cabs will ever be false, but strictly speaking dCabs should be calculated before Cext,
+	 * when SQ_FINDIP is used
+	 */
+	if (ScatRelation==SQ_FINDIP && calc_Cext) calc_Cabs=true;
+	if (IntRelation==G_SO) reduced_FFT=false;
 	/* TO ADD NEW INTERACTION FORMULATION
 	 * If the new Green's tensor is non-symmetric (which is very unlikely) add it to the definition of reduced_FFT
 	 */
@@ -2034,8 +1975,6 @@ void VariablesInterconnect(void)
 	}
 	// if not initialized before, IGT precision is set to that of the iterative solver
 	if (igt_eps==UNDEF) igt_eps=iter_eps;
-	// default polarizability formulation depends on rect_dip
-	if (PolRelation==(enum pol)UNDEF) PolRelation = rectDip ? POL_CLDR : POL_LDR;
 	// parameter incompatibilities
 	if (scat_plane && yzplane) PrintError("Currently '-scat_plane' and '-yz' cannot be used together.");
 	if (orient_avg) {
@@ -2073,20 +2012,6 @@ void VariablesInterconnect(void)
 		scat_plane=false;
 		scat_grid=false;
 	}
-	if (rectDip) {
-		maxRectScale=MAX(rectScaleX,rectScaleY);
-		MAXIMIZE(maxRectScale,rectScaleZ);
-		if (PolRelation!=POL_CLDR && PolRelation!=POL_CM && PolRelation!=POL_IGT_SO)
-			PrintError("The specified polarizability formulation is designed only for cubical dipoles. Currently, only "
-			"the following formulations can be used with rectangular dipoles: cm, cldr, and igt_so");
-		else if (PolRelation!=POL_IGT_SO && IntRelation==G_IGT) LogWarning(EC_WARN,ONE_POS,"Using IGT interaction with "
-			"point-dipole polarizability formulations will produce wrong results for rectangular dipoles. In most "
-			"cases you should use '-rect_dip ... -int igt ... -pol igt_so'");
-		if (anisotropy) PrintError("Currently '-anisotr' and '-rect_dip' can not be used together");
-		if (sh_granul) PrintError("Currently '-granul' and '-rect_dip' can not be used together");
-		if (IntRelation!=G_POINT_DIP && IntRelation!=G_IGT) PrintError("The specified interaction formulation is "
-			"designed only for cubical dipoles. Currently, only 'poi' and 'igt' can be used with rectangular dipoles");
-	}	
 	if (anisotropy) {
 		if (PolRelation==POL_CLDR) PrintError("'-anisotr' is incompatible with '-pol cldr'");
 		if (PolRelation==POL_SO) PrintError("'-anisotr' is incompatible with '-pol so'");
@@ -2115,15 +2040,12 @@ void VariablesInterconnect(void)
 		if (orient_used) PrintError("Currently '-orient' and '-surf' can not be used together");
 		if (calc_mat_force) PrintError("Currently calculation of radiation forces is incompatible with '-surf'");
 		if (InitField==IF_WKB) PrintError("'-init_field wkb' and '-surf' can not be used together");
-		if (ReflRelation==(enum refl)UNDEF) ReflRelation = msubInf ? GR_IMG : GR_SOM;
+		if (!int_surf_used) ReflRelation = msubInf ? GR_IMG : GR_SOM;
 		else if (msubInf && ReflRelation!=GR_IMG) PrintError("For perfectly reflecting surface interaction is always "
 			"computed through an image dipole. So this case is incompatible with other options to '-int_surf ...'");
 		/* TO ADD NEW REFLECTION FORMULATION
 		 * Take a look at the above logic, and revise if the new formulation is not fully consistent with it
 		 */
-		 if (rectDip && ReflRelation==GR_SOM && rectScaleX!=rectScaleY) PrintError("Currently calculation of "
-			"Sommerfeld integrals (default for the surface mode) requires dipoles to have the same dimensions along "
-			"the x- and y-axes (but not z)");
 	}
 	InteractionRealArgs=(beamtype==B_DIPOLE); // other cases may be added here in the future (e.g. nearfields)
 #ifdef SPARSE
@@ -2182,22 +2104,23 @@ void VariablesInterconnect(void)
 	// initialize averaging over orientation
 	if (orient_avg) {
 		ReadAvgParms(avg_parms);
-		symX=symY=symZ=symR=false;
+		if (sym_type==SYM_AUTO) sym_type=SYM_NO;
 		avg_inc_pol=true;
 	}
-	else { // initialize rotation stuff and test symmetries of the beam in particle reference frame
+	else {
+		// else - initialize rotation stuff
 		InitRotation();
-		UpdateSymVec(prop);
-		if (beam_asym) UpdateSymVec(beam_center);
+		/* if not default incidence (generally, along z-axis), break the symmetry completely. This can be improved to
+		 * account for some special cases, however, then symmetry of Gaussian beam should be treated more thoroughly
+		 * than now.
+		 */
+		if (!vAlongZ(prop) && sym_type==SYM_AUTO) sym_type=SYM_NO;
 	}
 	ipr_required=(IterMethod==IT_BICGSTAB || IterMethod==IT_CGNR);
 	/* TO ADD NEW ITERATIVE SOLVER
 	 * add the new iterative solver to the above line, if it requires inner product calculation during matrix-vector
 	 * multiplication (i.e. calls MatVec function with non-NULL third argument)
 	 */
-#ifndef NO_IMEXP_TABLE
-	imExpTableInit();
-#endif
 
 	/* TO ADD NEW COMMAND LINE OPTION
 	 * If a new command line option may potentially conflict or interact with other options, add here code to implement
@@ -2211,8 +2134,6 @@ void FinalizeSymmetry(void) {
 	// finalize symmetries
 	if (sym_type==SYM_NO) symX=symY=symZ=symR=false;
 	else if (sym_type==SYM_ENF) symX=symY=symZ=symR=true;
-	// test based on SR^2 = SX*SY; uses handmade XOR
-	if (symR && ((symX&&!symY) || (symY&&!symX))) LogError(ONE_POS,"Inconsistency in internally defined symmetries");
 	// additional tests in case of two polarization runs
 	if (!(symR && !scat_grid)) {
 		if (beamtype==B_READ && beam_fnameX==NULL)
@@ -2329,7 +2250,7 @@ void PrintInfo(void)
 	if (IFROOT) {
 		// print basic parameters
 		printf("box dimensions: %ix%ix%i\n",boxX,boxY,boxZ);
-		printf("lambda: "GFORM"   Dipoles/lambda: "GFORMDEF"%s\n",lambda,dpl,rectDip ? " (along the x-axis)" : "");
+		printf("lambda: "GFORM"   Dipoles/lambda: "GFORMDEF"\n",lambda,dpl);
 		printf("Required relative residual norm: "GFORMDEF"\n",iter_eps);
 		printf("Total number of occupied dipoles: %zu\n",nvoid_Ndip);
 		// log basic parameters
@@ -2341,8 +2262,6 @@ void PrintInfo(void)
 			"    volume fraction: specified - "GFORMDEF", actual - "GFORMDEF"\n",gr_mat+1,gr_N,gr_d,gr_vf,gr_vf_real);
 #endif // SPARSE
 		fprintf(logfile,"box dimensions: %ix%ix%i\n",boxX,boxY,boxZ);
-		if(rectDip) PrintBoth(logfile,"Using rectangular dipoles with proportions %g:%g:%g (x:y:z)\n",
-			rectScaleX,rectScaleY,rectScaleZ);
 		if (anisotropy) {
 			fprintf(logfile,"refractive index (diagonal elements of the tensor):\n");
 			if (Nmat==1) fprintf(logfile,"    "CFORM3V"\n",REIM3V(ref_index));
@@ -2366,10 +2285,10 @@ void PrintInfo(void)
 		}
 		if (surface) {
 			if (msubInf) fprintf(logfile,"Particle is placed near the perfectly reflecting substrate\n");
-			else fprintf(logfile,"Particle is placed near the substrate with refractive index "CFORM"\n",REIM(msub));
+			else fprintf(logfile,"Particle is placed near the substrate with refractive index "CFORM",\n",REIM(msub));
 			fprintf(logfile,"  height of the particle center: "GFORMDEF"\n",hsub);
 		}
-		fprintf(logfile,"Dipoles/lambda: "GFORMDEF"%s\n",dpl,rectDip ? " (along the x-axis)" : "");
+		fprintf(logfile,"Dipoles/lambda: "GFORMDEF"\n",dpl);
 		if (volcor_used) fprintf(logfile,"\t(Volume correction used)\n");
 		fprintf(logfile,"Required relative residual norm: "GFORMDEF"\n",iter_eps);
 		fprintf(logfile,"Total number of occupied dipoles: %zu\n",nvoid_Ndip);
@@ -2439,11 +2358,9 @@ void PrintInfo(void)
 				if (avg_inc_pol) fprintf(logfile," (averaged over incident polarization)");
 				fprintf(logfile,"\n");
 				break;
-			case POL_NLOC:
+			case POL_NLOC: fprintf(logfile,"'Non-local' (averaged, Gaussian width Rp="GFORMDEF")\n",polNlocRp); break;
+			case POL_NLOC0:
 				fprintf(logfile,"'Non-local' (based on lattice sum, Gaussian width Rp="GFORMDEF")\n",polNlocRp);
-				break;
-			case POL_NLOC_AV:
-				fprintf(logfile,"'Non-local' (averaged, Gaussian width Rp="GFORMDEF")\n",polNlocRp);
 				break;
 			case POL_RRC: fprintf(logfile,"'Radiative Reaction Correction'\n"); break;
 			case POL_SO: fprintf(logfile,"'Second Order'\n"); break;
@@ -2468,12 +2385,15 @@ void PrintInfo(void)
 			case G_IGT:
 				fprintf(logfile,"'Integrated Green's tensor' (accuracy "GFORMDEF", ",igt_eps);
 				if (igt_lim==UNDEF) fprintf(logfile,"no distance limit)\n");
-				else fprintf(logfile,"for distance < "GFORMDEF" dipole sizes%s)\n",igt_lim,
-					rectDip ? " along the greatest dimension" : "");
+				else fprintf(logfile,"for distance < "GFORMDEF" dipole sizes)\n",igt_lim);
 				break;
 			case G_IGT_SO: fprintf(logfile,"'Integrated Green's tensor [approximation O(kd^2)]'\n"); break;
-			case G_NLOC: fprintf(logfile,"'Non-local' (point-value, Gaussian width Rp="GFORMDEF")\n",nloc_Rp); break;
-			case G_NLOC_AV: fprintf(logfile,"'Non-local' (averaged, Gaussian width Rp="GFORMDEF")\n",nloc_Rp); break;
+			case G_NLOC:
+				fprintf(logfile,"'Non-local interaction' (averaged, Gaussian width Rp="GFORMDEF")\n",nloc_Rp);
+				break;
+			case G_NLOC0:
+				fprintf(logfile,"'Non-local interaction' (point-value, Gaussian width Rp="GFORMDEF")\n",nloc_Rp);
+				break;
 			case G_POINT_DIP: fprintf(logfile,"'as Point dipoles'\n"); break;
 			case G_SO: fprintf(logfile,"'Second Order'\n"); break;
 		}
@@ -2527,17 +2447,9 @@ void PrintInfo(void)
 		 */
 		// log Symmetry options
 		switch (sym_type) {
-			case SYM_AUTO:
-				fprintf(logfile,"Symmetries: ");
-				if (symX) fprintf(logfile,"X");
-				if (symY) fprintf(logfile,"Y");
-				if (symZ) fprintf(logfile,"Z");
-				if (symR) fprintf(logfile,"R");
-				if (!(symX||symY||symZ||symR)) fprintf(logfile,"none");
-				fprintf(logfile,"\n");
-				break;
-			case SYM_NO: fprintf(logfile,"Symmetries: cancelled by user\n"); break;
-			case SYM_ENF: fprintf(logfile,"Symmetries: enforced by user (warning!)\n"); break;
+			case SYM_AUTO: break; //  do not print anything in this case
+			case SYM_NO: fprintf(logfile,"No symmetries are used\n"); break;
+			case SYM_ENF: fprintf(logfile,"Symmetry is enforced by user (warning!)\n"); break;
 		}
 		// log optimization method
 		if (save_memory) fprintf(logfile,"Optimization is done for minimum memory usage\n");

@@ -2,7 +2,7 @@
  * $Date::                            $
  * Descr: all the constants used by ADDA code, including enum constants, also defines some useful macros
  *
- * Copyright (C) 2006-2014 ADDA contributors
+ * Copyright (C) 2006-2013 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
@@ -18,7 +18,7 @@
 #define __const_h
 
 // version number (string)
-#define ADDA_VERSION "1.4.0-alpha"
+#define ADDA_VERSION "1.3b3"
 
 /* ADDA uses certain C99 extensions, which are widely supported by GNU and Intel compilers. However, they may be not
  * completely supported by e.g. Microsoft Visual Studio compiler. Therefore, we check the version of the standard here
@@ -56,13 +56,9 @@
 #define MIN(A,B) (((A) > (B)) ? (B) : (A))
 #define MAX(A,B) (((A) < (B)) ? (B) : (A))
 #define MAXIMIZE(A,B) {if ((A)<(B)) (A)=(B);}
-#define IS_ODD(n) ((n) & 1) // n is integer
-#define IS_EVEN(n) (!(IS_ODD(n)))
-#define SIGN(A) ((A) >= 0.0 ? 1 : -1)
-#define DIV_CEILING(A,B) (((A)%(B)==0) ? (A)/(B) : ((A)/(B))+1 ) // valid only for nonnegative A and B
+#define IS_EVEN(A) (((A)%2) == 0)
 #define LENGTH(A) ((int)(sizeof(A)/sizeof(A[0]))) // length of any array (converted to int)
 #define STRINGIFY(A) #A
-#define GREATER_EQ2(a1,a2,b1,b2) ( (a1)>(b1) || ( (a1)==(b1) && (a2)>=(b2) )) // a1.a2>=b1.b2
 
 // parallel definitions
 #ifdef ADDA_MPI
@@ -99,7 +95,6 @@
 #define SQRT2_9PI           0.26596152026762178529329737328959
 #define EULER               0.57721566490153286060651209008241
 #define FULL_ANGLE          360.0
-#define MICRO               1E-6
 
 // sets the maximum box size; otherwise 'position' should be changed
 #define BOX_MAX USHRT_MAX
@@ -141,13 +136,11 @@
 #define MIN_TERM_WIDTH 20 // ADDA never takes value less than that from environmental variables
 
 // formats for outputs of float values
-#define EFORM "%.10E"             // fixed width
-#define GFORM "%.10g"             // variable width (showing significant digits)
-#define GFORMDEF "%g"             // default output for non-precise values
-#define GFORM_FULL "%.16g"        // full precision (for some debugging applications)
-#define GFORM_DEBUG "%.2g"        // for debug and error output
-#define CFORM "%.10g%+.10gi"      // for complex numbers; may be defined in terms of GFORM
-#define CFORM_FULL "%.16g%+.16gi" // full-precision complex
+#define EFORM "%.10E"        // fixed width
+#define GFORM "%.10g"        // variable width (showing significant digits)
+#define GFORMDEF "%g"        // default output for non-precise values
+#define GFORM_DEBUG "%.2g"   // for debug and error output
+#define CFORM "%.10g%+.10gi" // for complex numbers; may be defined in terms of GFORM
 	// derived formats; starting "" is to avoid redundant syntax errors in Eclipse
 #define GFORM3V "("GFORM","GFORM","GFORM")"
 #define GFORM3L ""GFORM" "GFORM" "GFORM
@@ -187,17 +180,17 @@ enum sh { // shape types
 };
 
 enum pol { // which way to calculate coupleconstant
-	POL_CLDR,    // Corrected Lattice Dispersion Relation
-	POL_CM,      // Clausius-Mossotti
-	POL_DGF,     // Digitized Green's Function (second order approximation of LAK)
-	POL_FCD,     // Filtered Coupled Dipoles
-	POL_IGT_SO,  // Second order approximation to Green's tensor integrated over a cube
-	POL_LAK,     // Exact result of IGT for sphere
-	POL_LDR,     // Lattice Dispersion Relation
-	POL_NLOC,    // non-local extension (Gaussian dipole-density, formula based on lattice sums)
-	POL_NLOC_AV, // same as NLOC, but based on averaging of Gaussian over the dipole volume
-	POL_RRC,     // Radiative Reaction correction
-	POL_SO       // Second Order formulation
+	POL_CLDR,   // Corrected Lattice Dispersion Relation
+	POL_CM,     // Clausius-Mossotti
+	POL_DGF,    // Digitized Green's Function (second order approximation of LAK)
+	POL_FCD,    // Filtered Coupled Dipoles
+	POL_IGT_SO, // Second order approximation to Green's tensor integrated over a cube
+	POL_LAK,    // Exact result of IGT for sphere
+	POL_LDR,    // Lattice Dispersion Relation
+	POL_NLOC,   // non-local extension (Gaussian dipole-density)
+	POL_NLOC0,  // same as NLOC, but based on lattice sum
+	POL_RRC,    // Radiative Reaction correction
+	POL_SO      // Second Order formulation
 	/* TO ADD NEW POLARIZABILITY FORMULATION
 	 * add an identifier starting with 'POL_' and a descriptive comment to this list in the alphabetical order.
 	 */
@@ -219,7 +212,7 @@ enum inter { // how to calculate interaction term
 	G_IGT,       // (direct) integration of Green's tensor
 	G_IGT_SO,    // approximate integration of Green's tensor (based on ideas of SO)
 	G_NLOC,      // non-local extension (interaction of Gaussian dipole-densities)
-	G_NLOC_AV,   // same as NLOC, but based on averaging of Gaussian over the dipole volume
+	G_NLOC0,     // non-local extension (interaction of Gaussian dipole-densities)
 	G_POINT_DIP, // as point dipoles
 	G_SO         // Second Order formulation
 	/* TO ADD NEW INTERACTION FORMULATION
@@ -235,9 +228,6 @@ enum refl { // how to calculate interaction of dipoles through the nearby surfac
 };// in alphabetical order
 
 // ldr constants
-/* Based on comparison of the original paper - Draine & Goodman, Astrophys. J. 405, 685-697 (1993) - with Mackowski,
- * J. Opt. Soc. Am. A 19, 881-893 (2002), one can deduce that b1=10*b2+2*b3 - it can also be derived explicitly.
- */
 #define LDR_B1  1.8915316
 #define LDR_B2 -0.1648469
 #define LDR_B3  1.7700004
@@ -287,7 +277,6 @@ enum beam { // beam types
 	B_BARTON5, // 5th order description of the Gaussian beam
 	B_DAVIS3,  // 3rd order description of the Gaussian beam
 	B_DIPOLE,  // field of a point dipole
-	B_ELECTRON,// field of a fast electron
 	B_LMINUS,  // 1st order description of the Gaussian beam
 	B_PLANE,   // infinite plane wave
 	B_READ     // read from file
@@ -343,7 +332,6 @@ enum init_field { // how to calculate initial field to be used in the iterative 
 
 // numbers less than this value (compared to unity) are considered to be zero (approximately 10*DBL_EPSILON)
 #define ROUND_ERR 1E-15
-#define SQRT_RND_ERR 3E-8 // sqrt(ROUND_ERR)
 
 // output and input file and directory names (can only be changed at compile time)
 #define F_EXPCOUNT      "ExpCount"

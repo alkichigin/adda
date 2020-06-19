@@ -1,3 +1,0 @@
-# standard ignores for compilation in all paths downstream
-*.o
-*.exe
