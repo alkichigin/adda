@@ -1,6 +1,8 @@
-/* Functions for computing complex exponents, too large to be kept inline
+/* File: cmplx.c
+ * $Date::                            $
+ * Descr: functions for computing complex exponents, too large to be kept inline
  *
- * Copyright (C) ADDA contributors
+ * Copyright (C) 2019 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as

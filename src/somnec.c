@@ -38,6 +38,8 @@
 #include <math.h>
 #include <stdlib.h>
 
+#include "cmplx.h"
+
 #ifndef	TRUE
 #define	TRUE	1
 #endif
@@ -65,13 +67,8 @@
 #define POF	.7853981635
 /* MAXH=100 seems sufficient to obtain convergence in all cases; larger values doesn't seem to improve the accuracy
  * even when smaller CRIT is used. Probably other approximations are employed somewhere.
- * However, larger MAXH is required for distances larger than several wavelengths to reach specified CRIT. In practice,
- * such CRIT is not needed for large distances, since Sommerfeld integrals are only a correction to the analytical
- * reflection term. Thus, we increased MAXH to 500 for now, but final solution is left for
- * https://github.com/adda-team/adda/issues/176
- * If you get convergence errors, increase MAXH further
  */
-#define MAXH	500
+#define MAXH	100
 #define CRIT	1.0E-4
 #define NM	131072
 #define NTS	4
@@ -103,15 +100,6 @@ static complex double a, b;
 
 /*-----------------------------------------------------------------------*/
 
-// a single function from cmplx.h not to include the whole file
-static inline double cAbs2(const complex double z)
-// square of absolute value of complex number; |z|^2
-{
-	return creal(z)*creal(z) + cimag(z)*cimag(z);
-}
-
-/*-----------------------------------------------------------------------*/
-
 void som_init(complex double epscf)
 {
   complex double erv, ezv;
@@ -126,7 +114,7 @@ void som_init(complex double epscf)
   ck1=csqrt(ck1sq);
   ck1r=creal(ck1);
   tkmag=100.*cabs(ck1);
-  tsmag=100.*cAbs2(ck1);
+  tsmag=100.*ck1*conj(ck1);
   cksm=ck2sq/(ck1sq+ck2sq);
   ct1=.5*(ck1sq-ck2sq);
   erv=ck1sq*ck1sq;
@@ -178,7 +166,7 @@ static void bessel(complex double z, complex double *j0, complex double *j0p )
     init = TRUE;
   } /* if(init == 0) */
 
-  zms=cAbs2(z);
+  zms=z*conj(z);
   if(zms <= 1.e-12)
   {
     *j0=1;
@@ -222,7 +210,7 @@ static void bessel(complex double z, complex double *j0, complex double *j0p )
   p1z=1.+(P11-P21*zi2)*zi2;
   q0z=(Q20*zi2-Q10)*zi;
   q1z=(Q11-Q21*zi2)*zi;
-  zk=cexp(I*(z-POF));
+  zk=imExp(z-POF);
   zi2=1./zk;
   cz=.5*(zk+zi2);
   sz=I*.5*(zi2-zk);
@@ -599,7 +587,7 @@ static void hankel( complex double z, complex double *h0, complex double *h0p )
 
   } /* if( ! init ) */
 
-  zms=cAbs2(z);
+  zms=z*conj(z);
   if(zms == 0.)
     abort_on_error(-7);
 
@@ -650,7 +638,7 @@ static void hankel( complex double z, complex double *h0, complex double *h0p )
   p1z=1.+(P11-P21*zi2)*zi2;
   q0z=(Q20*zi2-Q10)*zi;
   q1z=(Q11-Q21*zi2)*zi;
-  zk=cexp(I*(z-POF))*csqrt(zi)*C3;
+  zk=imExp(z-POF)*csqrt(zi)*C3;
   *h0=zk*(p0z+I*q0z);
   *h0p=I*zk*(p1z+I*q1z);
 
@@ -876,7 +864,7 @@ static void saoa( double t, complex double *ans)
       cgam2=-cgam2;
   }
 
-  xlr=cAbs2(xl);
+  xlr=xl*conj(xl);
   if(xlr >= tsmag)
   {
     if(cimag(xl) >= 0.)
@@ -979,37 +967,38 @@ static void abort_on_error( int why )
   switch( why )
   {
     case -1 : /* abort if input file name too long */
-      fprintf(stderr, "%s\n",
-	  "nec2c: input file name too long - aborting");
+      fprintf( stderr, "%s\n",
+	  "nec2c: input file name too long - aborting" );
       break;
 
     case -2 : /* abort if output file name too long */
-      fprintf(stderr, "%s\n",
-	  "nec2c: output file name too long - aborting");
+      fprintf( stderr, "%s\n",
+	  "nec2c: output file name too long - aborting" );
       break;
 
     case -3 : /* abort on input file read error */
-      fprintf(stderr, "%s\n",
-	  "nec2c: error reading input file - aborting");
+      fprintf( stderr, "%s\n",
+	  "nec2c: error reading input file - aborting" );
       break;
 
     case -4 : /* Abort on malloc failure */
-      fprintf(stderr, "%s\n",
-	  "nec2c: A memory allocation request has failed - aborting");
+      fprintf( stderr, "%s\n",
+	  "nec2c: A memory allocation request has failed - aborting" );
       break;
 
     case -5 : /* Abort if a GF card is read */
-      fprintf(stderr, "%s\n",
-	  "nec2c: NGF solution option not supported - aborting");
+      fprintf( stderr, "%s\n",
+	  "nec2c: NGF solution option not supported - aborting" );
       break;
 
     case -6: /* No convergence in gshank() */
-      fprintf(stderr,"No convergence in gshank() - aborting. Try to increase MAXH in somnec.c and recompile\n");
+            fprintf( stderr, "%s\n",
+	  "nec2c: No convergence in gshank() - aborting" );
       break;
 
     case -7: /* Error in hankel() */
-      fprintf(stderr, "%s\n",
-	  "nec2c: hankel not valid for z=0. - aborting");
+            fprintf( stderr, "%s\n",
+	  "nec2c: hankel not valid for z=0. - aborting" );
       break;
   }  /* switch( why ) */
 

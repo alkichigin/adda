@@ -1,12 +1,14 @@
-/* A few iterative techniques to solve DDA equations
+/* File: iterative.c
+ * $Date::                            $
+ * Descr: a few iterative techniques to solve DDA equations
  *
- * The linear system is composed so that diagonal terms are equal to 1, therefore use of Jacobi preconditioners does not
- * have any effect.
+ *        The linear system is composed so that diagonal terms are equal to 1, therefore use of Jacobi preconditioners
+ *        does not have any effect.
  *
- * CS methods still converge to the right result even when matrix is slightly non-symmetric (e.g. -int so), however they
- * do it much slowly than usually. It is recommended then to use BiCGStab or BCGS2.
+ *        CS methods still converge to the right result even when matrix is slightly non-symmetric (e.g. -int so),
+ *        however they do it much slowly than usually. It is recommended then to use BiCGStab or BCGS2.
  *
- * Copyright (C) ADDA contributors
+ * Copyright (C) 2006-2015 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
@@ -37,7 +39,6 @@
 #ifdef OCL_BLAS
 #	include "oclcore.h"
 #	include <clBLAS.h> //external library
-#	include <clBLAS.version.h>
 #endif
 
 // SEMI-GLOBAL VARIABLES
@@ -98,11 +99,7 @@ struct iter_params_struct {
 	int vec_N;        // number of additional vectors to describe the state
 	void (*func)(const enum phase); // pointer to implementation of the iterative solver
 };
-
-#if defined(__INTEL_COMPILER) && (__INTEL_COMPILER >= 1100) && (__INTEL_COMPILER < 1200)
-#	define WORKAROUND146 // workaround for issue 146 (should not be relevant to modern compilers)
-static doublecomplex dumb;
-#endif
+static doublecomplex dumb ATT_UNUSED; // dumb variable, used in workaround for issue 146
 
 #define ITER_FUNC(name) static void name(const enum phase ph)
 
@@ -140,66 +137,11 @@ static const struct iter_params_struct params[]={
 void MatVec(doublecomplex * restrict in,doublecomplex * restrict out,double * inprod,bool her,TIME_TYPE *timing,
 	TIME_TYPE *comm_timing);
 
-#ifdef OCL_BLAS
-// Test clBLAS version (specific numbers is because we never considered earlier versions)
-#	define CLBLAS_VER_REQ 2
-#	define CLBLAS_SUBVER_REQ 12
-#	if !GREATER_EQ2(clblasVersionMajor,clblasVersionMinor,CLBLAS_VER_REQ,CLBLAS_SUBVER_REQ)
-#		error "clBLAS version is too old"
-#	endif
-
-// Error-checking functionality for clBLAS
-#	define CLBLAS_CH_ERR(a) Check_clBLAS_Err(a,ALL_POS)
-
-//======================================================================================================================
-
-static const char *Print_clBLAS_Errstring(clblasStatus err)
-// produces meaningful error message from the clBLAS-specific error code, based on clBLAS.h v.2.12.0 (NULL if not found)
-{
-	switch (err) {
-		case clblasNotImplemented:      return "Functionality not implemented";
-		case clblasNotInitialized:      return "Library not initialized";
-		case clblasInvalidMatA:         return "Invalid matrix A";
-		case clblasInvalidMatB:         return "Invalid matrix B";
-		case clblasInvalidMatC:         return "Invalid matrix C";
-		case clblasInvalidVecX:         return "Invalid vector X";
-		case clblasInvalidVecY:         return "Invalid vector Y";
-		case clblasInvalidDim:          return "Invalid input dimensions";
-		case clblasInvalidLeadDimA:     return "Leading dimension of matrix A smaller than the first size";
-		case clblasInvalidLeadDimB:     return "Leading dimension of matrix B smaller than the second size";
-		case clblasInvalidLeadDimC:     return "Leading dimension of matrix C smaller than the third size";
-		case clblasInvalidIncX:         return "Null increment for vector X";
-		case clblasInvalidIncY:         return "Null increment for vector Y";
-		case clblasInsufficientMemMatA: return "Insufficient memory for matrix A";
-		case clblasInsufficientMemMatB: return "Insufficient memory for matrix B";
-		case clblasInsufficientMemMatC: return "Insufficient memory for matrix C";
-		case clblasInsufficientMemVecX: return "Insufficient memory for vector X";
-		case clblasInsufficientMemVecY: return "Insufficient memory for vector Y";
-		default:                        return NULL;
-	}
-}
-
-//======================================================================================================================
-
-static void Check_clBLAS_Err(const clblasStatus err,ERR_LOC_DECL)
-/* Checks error code for clBLAS calls and prints error if necessary. First searches among clBLAS specific errors. If not
- * found, uses general error processing for CL calls (since clBLAS error codes can take standard cl values as well).
- */
-{
-	if (err != clblasSuccess) {
-		const char *str=Print_clBLAS_Errstring(err);
-		if (str!=NULL) LogError(ERR_LOC_CALL,"clBLAS error code %d: %s\n",err,str);
-		else PrintCLErr((cl_int)err,ERR_LOC_CALL,NULL);
-	}
-}
-
-#endif
-
 //======================================================================================================================
 
 static void MatVec_wrapper(doublecomplex * restrict in,doublecomplex * restrict out,double * inprod,bool her,
 	TIME_TYPE *timing,TIME_TYPE *comm_timing)
-/* function wrapper for MatVec to be called within the iterative solver if the solver is able to use clBLAS, i.e.
+/* fuction wrapper for MatVec to be called within the iterative solver if the solver is able to use clBLAS, i.e.
  * the host and GPU memory does not have to be synchronized. Currently it is only used in the BiCG solver.
  */
 {
@@ -375,7 +317,7 @@ static void ProgressReport(void)
 		else temp="- ";
 		SnprintfErr(ONE_POS,progr_string,MAX_LINE,RESID_STRING"  %s",niter,err,temp);
 		if (!orient_avg) fprintf(logfile,"%s  progress ="FFORM_PROG"\n",progr_string,progr);
-		PRINTFB("%s\n",progr_string);
+		printf("%s\n",progr_string);
 		prev_err=err;
 	}
 	niter++;
@@ -460,13 +402,6 @@ ITER_FUNC(BCGS2)
 			scalars[0].size=scalars[1].size=sizeof(doublecomplex);
 			vectors[0].ptr=vec2; // u[0]
 			vectors[0].size=sizeof(doublecomplex);
-#ifdef __INTEL_COMPILER // workaround for issue 286
-			/* otherwise, the Intel compiler Classic (last tested for v. 2021.2) produces broken code with -O1 and
-			 * higher, by ignoring some of the pointer assignments above r[1],r[2],u[1],u[2]. We were not able to solve
-			 * the issue by dumb variable assignments
-			 */
-			fflush(stdout);
-#endif
 			return;
 		case PHASE_INIT:
 			if (!load_chpoint) {
@@ -602,17 +537,15 @@ ITER_FUNC(BiCG_CS)
 			scalars[0].ptr=&ro_old;
 			scalars[0].size=sizeof(doublecomplex);
 			return;
-		case PHASE_INIT:
+		case PHASE_INIT: 
 #ifdef OCL_BLAS
-			; // This initialization part need to be moved somewhere during further adoption of clBLAS
-			cl_uint major,minor,patch;
-			CLBLAS_CH_ERR(clblasGetVersion(&major,&minor,&patch));
-			if (!GREATER_EQ2(major,minor,CLBLAS_VER_REQ,CLBLAS_SUBVER_REQ)) LogError(ONE_POS,
-				"clBLAS library version (%u.%u) is too old. Version %d.%d or newer is required",
-				major,minor,CLBLAS_VER_REQ,CLBLAS_SUBVER_REQ);
-			D("clBLAS library version - %u.%u.%u",major,minor,patch);
 			D("clblasSetup started");
-			CLBLAS_CH_ERR(clblasSetup());
+			CL_CH_ERR(clblasSetup());
+#	ifdef DEBUGFULL
+			cl_uint major,minor,patch;
+			CL_CH_ERR(clblasGetVersion(&major,&minor,&patch));
+			D("clBLAS library version - %u.%u.%u",major,minor,patch);
+#	endif
 			CL_CH_ERR(clEnqueueWriteBuffer(command_queue,bufpvec,CL_FALSE,0,sizeof(doublecomplex)*local_nRows,pvec,0,
 				NULL,NULL));
 			CL_CH_ERR(clEnqueueWriteBuffer(command_queue,bufrvec,CL_FALSE,0,sizeof(doublecomplex)*local_nRows,rvec,0,
@@ -630,7 +563,7 @@ ITER_FUNC(BiCG_CS)
 			 */
 			CREATE_CL_BUFFER(bufro_new,CL_MEM_READ_WRITE,sizeof(doublecomplex),NULL);
 			CREATE_CL_BUFFER(bufmu,CL_MEM_READ_WRITE,sizeof(doublecomplex),NULL);
-			CLBLAS_CH_ERR(clblasZdotu(local_nRows,bufro_new,0,bufrvec,0,1,bufrvec,0,1,buftmp,1,&command_queue,0,NULL,
+			CL_CH_ERR(clblasZdotu(local_nRows,bufro_new,0,bufrvec,0,1,bufrvec,0,1,buftmp,1,&command_queue,0,NULL,
 				NULL));
 			CL_CH_ERR(clEnqueueReadBuffer(command_queue,bufro_new,CL_TRUE,0,sizeof(doublecomplex),&ro_new,0,NULL,NULL));
 #else
@@ -654,9 +587,9 @@ ITER_FUNC(BiCG_CS)
 				// p_k=beta_k-1*p_k-1+r_k-1
 #ifdef OCL_BLAS
 				cl_double2 clbeta = {.s={creal(beta),cimag(beta)}};
-				CLBLAS_CH_ERR(clblasZscal(local_nRows,clbeta,bufpvec,0,1,1,&command_queue,0,NULL,NULL));
+				CL_CH_ERR(clblasZscal(local_nRows,clbeta,bufpvec,0,1,1,&command_queue,0,NULL,NULL));
 				cl_double2 clunit = {.s={1,0}};
-				CLBLAS_CH_ERR(clblasZaxpy(local_nRows,clunit,bufrvec,0,1,bufpvec,0,1,1,&command_queue,0,NULL,NULL));
+				CL_CH_ERR(clblasZaxpy(local_nRows,clunit,bufrvec,0,1,bufpvec,0,1,1,&command_queue,0,NULL,NULL));
 #else
 				nIncrem10_cmplx(pvec,rvec,beta,NULL,NULL);
 #endif
@@ -666,7 +599,7 @@ ITER_FUNC(BiCG_CS)
 			else MatVec_wrapper(pvec,Avecbuffer,NULL,false,&Timing_OneIterMVP,&Timing_OneIterMVPComm);
 			// mu_k=p_k.q_k; check for mu_k!=0
 #ifdef OCL_BLAS
-			CLBLAS_CH_ERR(clblasZdotu(local_nRows,bufmu,0,bufpvec,0,1,bufAvecbuffer,0,1,buftmp,1,&command_queue,0,NULL,
+			CL_CH_ERR(clblasZdotu(local_nRows,bufmu,0,bufpvec,0,1,bufAvecbuffer,0,1,buftmp,1,&command_queue,0,NULL,
 				NULL));
 			CL_CH_ERR(clEnqueueReadBuffer(command_queue,bufmu,CL_TRUE,0,sizeof(doublecomplex),&mu,0,NULL,NULL));
 #else
@@ -680,7 +613,7 @@ ITER_FUNC(BiCG_CS)
 			// x_k=x_k-1+alpha_k*p_k
 #ifdef OCL_BLAS
 			cl_double2 clalpha = {.s={creal(alpha),cimag(alpha)}};
-			CLBLAS_CH_ERR(clblasZaxpy(local_nRows,clalpha,bufpvec,0,1,bufxvec,0,1,1,&command_queue,0,NULL,NULL));
+			CL_CH_ERR(clblasZaxpy(local_nRows,clalpha,bufpvec,0,1,bufxvec,0,1,1,&command_queue,0,NULL,NULL));
 #else
 			nIncrem01_cmplx(xvec,pvec,alpha,NULL,NULL);
 #endif
@@ -689,15 +622,14 @@ ITER_FUNC(BiCG_CS)
 #ifdef OCL_BLAS
 			cl_double2 cltemp = {.s={creal(temp),cimag(temp)}};
 			CREATE_CL_BUFFER(bufinprodRp1,CL_MEM_READ_WRITE,sizeof(double),NULL);
-			CLBLAS_CH_ERR(clblasZaxpy(local_nRows,cltemp,bufAvecbuffer,0,1,bufrvec,0,1,1,&command_queue,0,NULL,NULL));
-			CLBLAS_CH_ERR(clblasDznrm2(local_nRows,bufinprodRp1,0,bufrvec,0,1,buftmp,1,&command_queue,0,NULL,NULL));
+			CL_CH_ERR(clblasZaxpy(local_nRows,cltemp,bufAvecbuffer,0,1,bufrvec,0,1,1,&command_queue,0,NULL,NULL));
+			CL_CH_ERR(clblasDznrm2(local_nRows,bufinprodRp1,0,bufrvec,0,1,buftmp,1,&command_queue,0,NULL,NULL));
 			CL_CH_ERR(clEnqueueReadBuffer(command_queue,bufinprodRp1,CL_TRUE,0,sizeof(double),&inprodRp1,0,NULL,NULL));
 			inprodRp1=inprodRp1*inprodRp1;
 #else
 			nIncrem01_cmplx(rvec,Avecbuffer,temp,&inprodRp1,&Timing_OneIterComm);
 #endif
 #ifdef OCL_BLAS
-			CL_CH_ERR(clFinish(command_queue)); // finish queue before freeing resources
 			my_clReleaseBuffer(bufinprodRp1);
 			my_clReleaseBuffer(bufro_new);
 			my_clReleaseBuffer(bufmu);
@@ -974,9 +906,7 @@ ITER_FUNC(CSYM)
 			// tau_k+1 = -s_k*tau_k; ||r_k|| = |tau_k+1|
 			tau*=-s_new;
 			inprodRp1=cAbs2(tau);
-#ifdef WORKAROUND146
-			dumb=tau;
-#endif
+			dumb=tau; // dumb statement to workaround issue 146
 			return; // end of PHASE_ITER
 	}
 	LogError(ONE_POS,"Unknown phase (%d) of the iterative solver",(int)ph);
@@ -1042,9 +972,7 @@ ITER_FUNC(QMR_CS)
 				// c_0=c_-1=1; s_0=s_-1=0
 				c_new=c_old=1.0;
 				s_new=s_old=0.0;
-#ifdef WORKAROUND146
-				dumb=beta;
-#endif
+				dumb=beta; // dumb statement to workaround issue 146
 			}
 			return;
 		case PHASE_ITER:
@@ -1172,9 +1100,7 @@ ITER_FUNC(QMR_CS_2)
 				eps=1;
 				theta_old=0;
 				eta=-1;
-#ifdef WORKAROUND146
-				dumb=eps;
-#endif
+				dumb=eps; // dumb statement to workaround issue 146
 			}
 			return;
 		case PHASE_ITER:
@@ -1376,7 +1302,7 @@ static void CalcFieldWKB(doublecomplex * restrict Efield)
 	mat=(unsigned char *)(top + boxXY);
 #endif
 	// calculate function of refractive index
-	for (i=0;i<Nmat;i++) vals[i]=I*(ref_index[i]-1)*kdZ/2;
+	for (i=0;i<Nmat;i++) vals[i]=I*(ref_index[i]-1)*kd/2;
 	vals[Nmat]=0;
 	// calculate values of mat (the same algorithm as in matvec), for void dipoles mat=Nmat
 	for (dip=0;dip<local_Ndip;dip++) mat[dip]=(unsigned char)Nmat;
@@ -1529,7 +1455,7 @@ int IterativeSolver(const enum iter method_in,const enum incpol which)
 			if (!orient_avg) {
 				fprintf(logfile,"%s\n%s",descr,tmp_str);
 			}
-			PRINTFB("%s\n%s",descr,tmp_str);
+			printf("%s\n%s",descr,tmp_str);
 		}
 		// initialize counters
 		niter=1;
@@ -1614,7 +1540,7 @@ int IterativeSolver(const enum iter method_in,const enum incpol which)
 			temp=sqrt(resid_scale*inprodR);
 			SnprintfErr(ONE_POS,tmp_str,MAX_LINE,"Final (recalculated) residual norm: "EFORM"\n",temp);
 			if (!orient_avg) fprintf(logfile,"%s",tmp_str);
-			PRINTFB("%s",tmp_str);
+			printf("%s",tmp_str);
 		}
 	}
 	// post-processing

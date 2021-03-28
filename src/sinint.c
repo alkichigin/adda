@@ -1,9 +1,11 @@
-/* Function for calculating sine and cosine integrals
+/* File: sinint.c
+ * $Date::                            $
+ * Descr: function for calculating sine and cosine integrals
  *
- * It was originaly based on routine given in "Numerical Recipes in C" 2nd ed. and then was slightly corrected according
- * to the 3rd ed. of the same book.
+ *        It was originaly based on routine given in "Numerical Recipes in C" 2nd ed. and then was slightly corrected
+ *        according to the 3rd ed. of the same book.
  *
- * Copyright (C) ADDA contributors
+ * Copyright (C) 2007-2010,2012-2013 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
@@ -64,7 +66,7 @@ void cisi(const double x,double *ci,double *si)
 			if (fabs(creal(del)-1)+fabs(cimag(del))<=EPS) break;
 		}
 		if (i>=MAXIT) LogError(ALL_POS,"Failed to converge during calculation of sine integral of "GFORMDEF,x);
-		h*=imExp(-t);
+		h*=imExpReal(-t);
 		*ci=-creal(h);
 		*si=PI_OVER_TWO+cimag(h);
 	}

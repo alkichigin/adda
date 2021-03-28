@@ -1,6 +1,8 @@
-/* All the constants used by ADDA code, including enum constants, also defines some useful macros
+/* File: const.h
+ * $Date::                            $
+ * Descr: all the constants used by ADDA code, including enum constants, also defines some useful macros
  *
- * Copyright (C) ADDA contributors
+ * Copyright (C) 2006-2014 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
@@ -16,19 +18,17 @@
 #define __const_h
 
 // version number (string)
-#define ADDA_VERSION "1.4.0"
+#define ADDA_VERSION "1.4.0-alpha"
 
 /* ADDA uses certain C99 extensions, which are widely supported by GNU and Intel compilers. However, they may be not
  * completely supported by e.g. Microsoft Visual Studio compiler. Therefore, we check the version of the standard here
  * and produce a strong warning, if it is not satisfied. The list of C99 features, used by ADDA, include (but may be not
- * limited to): stdbool.h, snprintf, %z argument in printf, '//' comments, restricted pointers, variadic macros.
- * Naturally, this test is not invoked if this header is included from C++ source file
+ * limited to): stdbool.h, snprintf, %z argument in printf, '//' comments, restricted pointers, variadic macros
 */
-#ifndef __cplusplus
-#if !defined(OVERRIDE_STDC_TEST) && (!defined(__STDC_VERSION__) || (__STDC_VERSION__ < 199901L))
-#	error "Support for C99 standard (at least many of its parts) is strongly recommended for compilation. Otherwise \
-the compilation may fail or produce wrong results. If you still want to try, enable an override in the Makefile."
-#endif
+# if !defined(OVERRIDE_STDC_TEST) && (!defined(__STDC_VERSION__) || (__STDC_VERSION__ < 199901L))
+#   error "Support for C99 standard (at least many of its parts) is strongly recommended for compilation. Otherwise \
+	the compilation will may fail or produce wrong results. If you still want to try, you may enable an override in \
+	the Makefile."
 #endif
 
 /* The following is to ensure that mingw64 with "-std=c99" will use c99-compliant printf-family functions. For some
@@ -287,6 +287,7 @@ enum beam { // beam types
 	B_BARTON5, // 5th order description of the Gaussian beam
 	B_DAVIS3,  // 3rd order description of the Gaussian beam
 	B_DIPOLE,  // field of a point dipole
+	B_ELECTRON,// field of a moving electron
 	B_LMINUS,  // 1st order description of the Gaussian beam
 	B_PLANE,   // infinite plane wave
 	B_READ     // read from file

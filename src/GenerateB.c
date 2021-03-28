@@ -1,17 +1,19 @@
-/* Generates the incident beam
+/* File: GenerateB.c
+ * $Date::                            $
+ * Descr: generate a incident beam
  *
- * Lminus beam is based on: G. Gouesbet, B. Maheu, G. Grehan, "Light scattering from a sphere arbitrary located
- * in a Gaussian beam, using a Bromwhich formulation", J.Opt.Soc.Am.A 5,1427-1443 (1988).
- * Eq.(22) - complex conjugate.
+ *        Lminus beam is based on: G. Gouesbet, B. Maheu, G. Grehan, "Light scattering from a sphere arbitrary located
+ *        in a Gaussian beam, using a Bromwhich formulation", J.Opt.Soc.Am.A 5,1427-1443 (1988).
+ *        Eq.(22) - complex conjugate.
  *
- * Davis beam is based on: L. W. Davis, "Theory of electromagnetic beams," Phys.Rev.A 19, 1177-1179 (1979).
- * Eqs.(15a),(15b) - complex conjugate; in (15a) "Q" changed to "Q^2" (typo).
+ *        Davis beam is based on: L. W. Davis, "Theory of electromagnetic beams," Phys.Rev.A 19, 1177-1179 (1979).
+ *        Eqs.(15a),(15b) - complex conjugate; in (15a) "Q" changed to "Q^2" (typo).
  *
- * Barton beam is based on: J. P. Barton and D. R. Alexander, "Fifth-order corrected electromagnetic-field components
- * for a fundamental Gaussian-beam," J.Appl.Phys. 66,2800-2802 (1989).
- * Eqs.(25)-(28) - complex conjugate.
+ *        Barton beam is based on: J. P. Barton and D. R. Alexander, "Fifth-order corrected electromagnetic-field
+ *        components for a fundamental Gaussian-beam," J.Appl.Phys. 66,2800-2802 (1989).
+ *        Eqs.(25)-(28) - complex conjugate.
  *
- * Copyright (C) ADDA contributors
+ * Copyright (C) 2006-2014 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
@@ -60,7 +62,7 @@ double beam_center_0[3]; // position of the beam center in laboratory reference 
  */
 doublecomplex eIncRefl[3],eIncTran[3];
 // used in param.c
-const char *beam_descr; // string for log file with beam parameters
+char *beam_descr; // string for log file with beam parameters
 
 // LOCAL VARIABLES
 static double s,s2;            // beam confinement factor and its square
@@ -68,6 +70,10 @@ static double scale_x,scale_z; // multipliers for scaling coordinates
 static doublecomplex ki,kt;    // abs of normal components of k_inc/k0, and ktran/k0
 static doublecomplex ktVec[3]; // k_tran/k0
 static double p0;              // amplitude of the incident dipole moment
+static doublecomplex gamma_eps_inv;// 1/gamma_eps
+static doublecomplex e_pref; // prefactor of the field of the electron
+static double e_w_v;   // prefactor in an argument of a phase exponent in the incident field of the electron
+static doublecomplex e_w_gv;  // prefactor in an argument of the Bessel_K in the incident field of the electron
 /* TO ADD NEW BEAM
  * Add here all internal variables (beam parameters), which you initialize in InitBeam() and use in GenerateB()
  * afterwards. If you need local, intermediate variables, put them into the beginning of the corresponding function.
@@ -80,7 +86,14 @@ void InitBeam(void)
 // initialize beam; produce description string
 {
 	double w0; // beam width
-	const char *tmp_str; // temporary string
+	//CASE: B_ELECTRON
+	static double e_energy;        // kinetic energy of the electron
+	static doublecomplex beta_eps;// v*m_host/c
+	static double e_v;      // speed of the electron
+	const double q_electron = -4.803204673e-10; //electric charge of an electron, esu
+	const double c_light = 29979245800; //speed of light in vacuum, cm/s
+	const double e_energy_rest = 510.99895; //Electron rest mass, keV
+	char *tmp_str; // temporary string
 	/* TO ADD NEW BEAM
 	 * Add here all intermediate variables, which are used only inside this function.
 	 */
@@ -105,7 +118,7 @@ void InitBeam(void)
 					/* Special case for msub near 1 to remove discontinuities for near-grazing incidence. The details
 					 * are discussed in CalcFieldSurf() in crosssec.c.
 					 */
-					if (cabs(msub-1)<ROUND_ERR && cabs(ki)<SQRT_RND_ERR) kt=ki;
+					if (cabs(msub-1)<ROUND_ERR && fabs(ki)<SQRT_RND_ERR) kt=ki;
 					else kt=cSqrtCut(1 - msub*msub*(prop_0[0]*prop_0[0]+prop_0[1]*prop_0[1]));
 					// determine propagation direction and full wavevector of wave transmitted into substrate
 					ktVec[0]=msub*prop_0[0];
@@ -115,10 +128,10 @@ void InitBeam(void)
 				else if (prop_0[2]<0) { // beam comes from above the substrate
 					inc_scale=1;
 					vRefl(prop_0,prIncRefl);
-					ki=-prop_0[2]; // always real
+					ki=-prop_0[2];
 					if (!msubInf) {
 						// same special case as above
-						if (cabs(msub-1)<ROUND_ERR && cabs(ki)<SQRT_RND_ERR) kt=ki;
+						if (cabs(msub-1)<ROUND_ERR && fabs(ki)<SQRT_RND_ERR) kt=ki;
 						else kt=cSqrtCut(msub*msub - (prop_0[0]*prop_0[0]+prop_0[1]*prop_0[1]));
 						// determine propagation direction of wave transmitted into substrate
 						ktVec[0]=prop_0[0];
@@ -149,7 +162,7 @@ void InitBeam(void)
 			 * irradiance). Alternative definition is p0=1, but then the results will scale with unit of length
 			 * (breaking scale invariance)
 			 */
-			p0=1/(WaveNum*WaveNum*WaveNum);
+			p0=1/(WaveNum*WaveNum*WaveNum); //Is it valid if WaveNum is complex?
 			if (IFROOT) beam_descr=dyn_sprintf("point dipole at "GFORMDEF3V,COMP3V(beam_center_0));
 			return;
 		case B_LMINUS:
@@ -162,7 +175,7 @@ void InitBeam(void)
 			vCopy(beam_pars+1,beam_center_0);
 			beam_asym=(beam_Npars==4 && (beam_center_0[0]!=0 || beam_center_0[1]!=0 || beam_center_0[2]!=0));
 			if (!beam_asym) vInit(beam_center);
-			s=1/(WaveNum*w0);
+			s=1/(WaveNum*w0); //Is it valid if WaveNum is complex?
 			s2=s*s;
 			scale_x=1/w0;
 			scale_z=s*scale_x; // 1/(k*w0^2)
@@ -178,12 +191,36 @@ void InitBeam(void)
 					case B_BARTON5:
 						tmp_str="5th order approximation, by Barton";
 						break;
-					default: LogError(ONE_POS,"Incompatibility error in GenerateB");
+					default: break;
 				}
 				beam_descr=dyn_sprintf("Gaussian beam (%s)\n"
 				                       "\tWidth="GFORMDEF" (confinement factor s="GFORMDEF")\n"
 				                       "\tCenter position: "GFORMDEF3V,tmp_str,w0,s,COMP3V(beam_center_0));
 			}
+			return;
+		case B_ELECTRON:
+			if (surface) PrintError("Currently, electron incident beam is not supported for '-surf'");
+			// initialize parameters
+			scale_z = 1e-7; //nm/Ñm
+			e_energy=beam_pars[0];
+			TestPositive(e_energy,"kinetic energy of the electron");
+			beam_center_0[0] = beam_pars[1];
+			beam_center_0[1] = beam_pars[2];
+			beam_center_0[2] = beam_pars[3];
+			beam_asym=(beam_center_0[0]!=0 || beam_center_0[1]!=0 || beam_center_0[2]!=0);
+			//symX=symY=symZ=symR=false;
+			if (!beam_asym) vInit(beam_center);
+			e_v = c_light*sqrt(1-pow((e_energy_rest/(e_energy+e_energy_rest)),2));
+			beta_eps = e_v*mhost/c_light;
+			gamma_eps_inv = csqrt(1-beta_eps*beta_eps);
+			//printf("omega = "EFORM"\n",WaveNum*c_light/scale_z);
+			//printf("v = "EFORM"\n",e_v);
+			e_w_v = creal(WaveNum/(beta_eps*scale_z));
+			printf("cimag(e_w_v) = %lf\n",cimag(WaveNum/(beta_eps*scale_z)));
+			e_w_gv = e_w_v*gamma_eps_inv;
+			e_pref = 2*q_electron*e_w_gv/(mhost*mhost*e_v);
+			//printf("e_pref = "CFORM"\n",REIM(e_pref));
+			if (IFROOT) beam_descr=dyn_sprintf("electron with energy %g keV in host medium with m_host="CFORM" moving through "GFORM3V"",e_energy,mhost,COMP3V(beam_center_0));
 			return;
 		case B_READ:
 			// the safest is to assume cancellation of all symmetries
@@ -230,12 +267,12 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 	size_t i,j;
 	doublecomplex psi0,Q,Q2;
 	doublecomplex v1[3],v2[3],v3[3],gt[6];
-	double ro2,ro4;
-	double x,y,z,x2_s,xy_s;
-	doublecomplex t1,t2,t3,t4,t5,t6,t7,t8,ctemp;
+	double ro,ro2,ro4;
+	double x,y,z,x2_s,xy_s,temp;
+	doublecomplex t1,t2,t3,t4,t5,t6,t7,t8,ctemp,e_wb_gv;
 	const double *ex; // coordinate axis of the beam reference frame
 	double ey[3];
-	double r1[3];
+	double r1[3],r1par[3],r1per[3];
 	const char *fname;
 	/* TO ADD NEW BEAM
 	 * Add here all intermediate variables, which are used only inside this function. You may as well use 't1'-'t8'
@@ -278,13 +315,13 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 						tc=FresnelTP(ki,kt,1/msub);
 					}
 					// phase shift due to the origin at height hsub
-					cvMultScal_cmplx(rc*cexp(-2*I*WaveNum*ki*hsub),eIncRefl,eIncRefl);
-					cvMultScal_cmplx(tc*cexp(I*WaveNum*(kt-ki)*hsub),eIncTran,eIncTran);
+					cvMultScal_cmplx(rc*imExp(-2*WaveNum*ki*hsub),eIncRefl,eIncRefl);
+					cvMultScal_cmplx(tc*imExp(WaveNum*(kt-ki)*hsub),eIncTran,eIncTran);
 					// main part
 					for (i=0;i<local_nvoid_Ndip;i++) {
 						j=3*i;
 						// b[i] = eIncTran*exp(ik*kt.r)
-						cvMultScal_cmplx(cexp(I*WaveNum*crDotProd(ktVec,DipoleCoord+j)),eIncTran,b+j);
+						cvMultScal_cmplx(imExp(WaveNum*crDotProd(ktVec,DipoleCoord+j)),eIncTran,b+j);
 					}
 				}
 				else if (prop[2]<0) { // beam comes from above the substrate
@@ -315,14 +352,14 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 						}
 					}
 					// phase shift due to the origin at height hsub
-					cvMultScal_cmplx(rc*imExp(2*WaveNum*creal(ki)*hsub),eIncRefl,eIncRefl); // assumes real ki
-					if (!msubInf) cvMultScal_cmplx(tc*cexp(I*WaveNum*(ki-kt)*hsub),eIncTran,eIncTran);
+					cvMultScal_cmplx(rc*imExpReal(2*WaveNum*ki*hsub),eIncRefl,eIncRefl);
+					if (!msubInf) cvMultScal_cmplx(tc*imExp(WaveNum*(ki-kt)*hsub),eIncTran,eIncTran);
 					// main part
 					for (i=0;i<local_nvoid_Ndip;i++) {
 						j=3*i;
 						// b[i] = ex*exp(ik*r.a) + eIncRefl*exp(ik*prIncRefl.r)
-						cvMultScal_RVec(imExp(WaveNum*DotProd(DipoleCoord+j,prop)),ex,b+j);
-						cvLinComb1_cmplx(eIncRefl,b+j,imExp(WaveNum*DotProd(DipoleCoord+j,prIncRefl)),b+j);
+						cvMultScal_RVec(imExpReal(WaveNum*DotProd(DipoleCoord+j,prop)),ex,b+j);
+						cvLinComb1_cmplx(eIncRefl,b+j,imExpReal(WaveNum*DotProd(DipoleCoord+j,prIncRefl)),b+j);
 					}
 				}
 			}
@@ -385,9 +422,9 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 				z=DotProd(r1,prop)*scale_z;
 				ro2=x*x+y*y;
 				Q=1/(2*z-I);
-				psi0=-I*Q*cexp(I*Q*ro2);
+				psi0=-I*Q*imExp(Q*ro2);
 				// ctemp=exp(ik*z0)*psi0, z0 - non-scaled coordinate (z/scale_z)
-				ctemp=imExp(WaveNum*z/scale_z)*psi0;
+				ctemp=imExpReal(WaveNum*z/scale_z)*psi0;
 				// the following logic (if-else-if...) is hard to replace by a simple switch
 				if (beamtype==B_LMINUS) cvMultScal_RVec(ctemp,ex,b+j); // b[i]=ctemp*ex
 				else {
@@ -438,6 +475,48 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 				}
 			}
 			return;
+		case B_ELECTRON:
+			for (i=0;i<local_nvoid_Ndip;i++) {
+				j=3*i;
+				// set relative coordinates (in beam's coordinate system)
+				LinComb(DipoleCoord+j,beam_center,1,-1,r1);
+
+				temp = DotProd(r1,prop);
+				vMultScal(temp,prop,r1par);
+				vSubtr(r1,r1par,r1per);
+				ro = vNorm(r1per)*scale_z;
+				z = temp*scale_z;
+				if(ro != 0) vNormalize(r1per);
+				else LogError(ONE_POS,"electron hit a dipole, this is currently not supported, ro = "EFORM, ro);
+
+				//printf("z = "EFORM"\n",z);
+				//printf("b = "EFORM"\n",ro);
+				//printf("g = "EFORM"\n",creal(1./gamma_eps_inv));
+
+				e_wb_gv = e_w_gv*ro;
+				cik01_(&e_wb_gv, &t1, &t2, &t3, &t4, &t7, &t5, &t8, &t6);
+				//printf("e_wb_gv\t=\t"CFORM"\n",REIM(e_wb_gv));
+				//printf("besselK0re\t=\t"EFORM"\n",creal(t7));
+				//printf("besselK0im\t=\t"EFORM"\n",cimag(t7));
+				//printf("besselK1re\t=\t"EFORM"\n",creal(t8));
+				//printf("besselK1im\t=\t"EFORM"\n",cimag(t8));
+
+				t4 = imExp(e_w_v*z);
+				//printf("imExp = "CFORM"\n",t4);
+				cvMultScal_RVec(t4*t8,r1per,v1);
+				cvMultScal_RVec((-I)*gamma_eps_inv*t4*t7,prop,v2);
+				cvAdd(v1,v2,v3);
+				cvMultScal_cmplx(e_pref,v3,b+j); //E_inc
+				printf("Einc\t=\t"CFORM3V"\n",REIM3V(b+j));
+
+				t4 = conj(t4);
+				cvMultScal_RVec(-t4*t8,r1per,v1);
+				cvMultScal_RVec((-I)*gamma_eps_inv*t4*t7,prop,v2);
+				cvAdd(v1,v2,v3);
+				cvMultScal_cmplx(e_pref,v3,E1+j); //E_1
+				//printf("E1\t=\t"CFORM3V"\n",REIM3V(E1+j));
+			}
+			return;
 		case B_READ:
 			if (which==INCPOL_Y) fname=beam_fnameY;
 			else fname=beam_fnameX; // which==INCPOL_X
@@ -449,11 +528,11 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 	 * add a case above. Identifier ('B_...') should be defined inside 'enum beam' in const.h. This case should set
 	 * complex vector 'b', describing the incident field in the particle reference frame. It is set inside the cycle for
 	 * each dipole of the particle and is calculated using
-	 * 1) 'DipoleCoord' – array of dipole coordinates;
-	 * 2) 'prop' – propagation direction of the incident field;
-	 * 3) 'ex' – direction of incident polarization;
-	 * 4) 'ey' – complementary unity vector of polarization (orthogonal to both 'prop' and 'ex');
-	 * 5) 'beam_center' – beam center in the particle reference frame (automatically calculated from 'beam_center_0'
+	 * 1) 'DipoleCoord' ï¿½ array of dipole coordinates;
+	 * 2) 'prop' ï¿½ propagation direction of the incident field;
+	 * 3) 'ex' ï¿½ direction of incident polarization;
+	 * 4) 'ey' ï¿½ complementary unity vector of polarization (orthogonal to both 'prop' and 'ex');
+	 * 5) 'beam_center' ï¿½ beam center in the particle reference frame (automatically calculated from 'beam_center_0'
 	 *                    defined in InitBeam).
 	 * If the new beam type is compatible with '-surf', include here the corresponding code. For that you will need
 	 * the variables, related to surface - see vars.c after "// related to a nearby surface".

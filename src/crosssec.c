@@ -1,7 +1,9 @@
-/* All the functions to calculate scattering quantities (except Mueller matrix), to read different parameters from
- * files, and to initialize orientation of the particle
+/* FILE : crosssec.c
+ * $Date::                            $
+ * Descr: all the functions to calculate scattering quantities (except Mueller matrix); to read different parameters
+ *        from files; and initialize orientation of the particle
  *
- * Copyright (C) ADDA contributors
+ * Copyright (C) 2006-2014 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
@@ -44,6 +46,7 @@ extern doublecomplex * restrict expsX,* restrict expsY,* restrict expsZ;
 extern const double beam_center_0[3];
 //extern doublecomplex eIncRefl[3],eIncTran[3];
 // defined and initialized in param.c
+extern doublecomplex abs_ref_index[MAX_NMAT];
 extern const double incPolX_0[3],incPolY_0[3];
 extern const enum scat ScatRelation;
 // defined and initialized in timing.c
@@ -59,7 +62,7 @@ Parms_1D parms_alpha; // parameters of integration over alpha
 Parms_1D parms[2];    // parameters for integration over theta,phi or beta,gamma
 angle_set beta_int,gamma_int,theta_int,phi_int; // sets of angles
 // used in param.c
-const char *avg_string; // string for output of function that reads averaging parameters
+char *avg_string; // string for output of function that reads averaging parameters
 // used in Romberg.c
 bool full_al_range; // whether full range of alpha angle is used
 
@@ -501,23 +504,6 @@ void ReadScatGridParms(const char * restrict fname)
 }
 
 //======================================================================================================================
-static inline double eta2(const double n[static restrict 3])
-/* calculates IGT_SO correction for scattering at direction n. Exact formula is based on integration of exp(ikn.r) over
- * the dipole volume, resulting in Product(sinc(kd[mu]*n[mu]/2),mu). But here we use a second-order approximation.
- * Does not depend on n for cubical dipoles.
- */
-{
-	return 1-(kdX*kdX*n[0]*n[0]+kdY*kdY*n[1]*n[1]+kdZ*kdZ*n[2]*n[2])/24;
-}
-
-//======================================================================================================================
-static inline doublecomplex eta2cmplx(const doublecomplex n[static restrict 3])
-// same as eta2, but for complex input vector. Does not depend on n (and is real) for cubical dipoles if n.n=1
-{
-	return 1-(kdX*kdX*n[0]*n[0]+kdY*kdY*n[1]*n[1]+kdZ*kdZ*n[2]*n[2])/24;
-}
-
-//======================================================================================================================
 
 static void CalcFieldFree(doublecomplex ebuff[static restrict 3], // where to write calculated scattering amplitude
                           const double n[static restrict 3])      // scattering direction
@@ -527,7 +513,7 @@ static void CalcFieldFree(doublecomplex ebuff[static restrict 3], // where to wr
  * angles is used with only small fraction of n, allowing simplifications.
  */
 {
-	double kkk;
+	doublecomplex kkk;
 	doublecomplex a,dpr;
 	doublecomplex sum[3],tbuff[3],tmp=0; // redundant initialization to remove warnings
 	int i;
@@ -542,7 +528,7 @@ static void CalcFieldFree(doublecomplex ebuff[static restrict 3], // where to wr
 
 	if (ScatRelation==SQ_SO) {
 		// !!! this should never happen
-		if (anisotropy || rectDip) LogError(ONE_POS,"Incompatibility error in CalcField");
+		if (anisotropy) LogError(ONE_POS,"Incompatibility error in CalcField");
 		// calculate correction coefficient
 		if (scat_avg) na=0;
 		else na=DotProd(n,prop);
@@ -553,9 +539,9 @@ static void CalcFieldFree(doublecomplex ebuff[static restrict 3], // where to wr
 	cvInit(sum);
 #ifndef SPARSE
 	// prepare values of exponents, along each of the coordinates
-	imExp_arr(-kdX*n[0],boxX,expsX);
-	imExp_arr(-kdY*n[1],boxY,expsY);
-	imExp_arr(-kdZ*n[2],local_Nz_unif,expsZ);
+	imExp_arr(-kd*n[0]*rectScaleX,boxX,expsX);
+	imExp_arr(-kd*n[1]*rectScaleY,boxY,expsY);
+	imExp_arr(-kd*n[2]*rectScaleZ,local_Nz_unif,expsZ);
 #endif // !SPARSE
 	/* this piece of code tries to use that usually only x position changes from dipole to dipole, saving a complex
 	 * multiplication seems to be beneficial, even considering bookkeeping overhead; it may not be as good for very
@@ -579,11 +565,11 @@ static void CalcFieldFree(doublecomplex ebuff[static restrict 3], // where to wr
 		}
 		a=tmp*expsX[ix];
 #else // sparse mode - the difference is that exponents are not precomputed
-			expY=imExp(-kdY*n[1]*iy2);
-			expZ=imExp(-kdZ*n[2]*iz2);
+			expY=imExp(-kd*n[1]*iy2*rectScaleY);
+			expZ=imExp(-kd*n[2]*iz2*rectScaleZ);
 			tmp=expY*expZ;
 		}
-		expX=imExp(-kdX*n[0]*ix);
+		expX=imExp(-kd*n[0]*ix*rectScaleX);
 		a=tmp*expX;
 #endif // SPARSE
 		/* the following line may incur certain overhead (from 0% to 5% depending on tests).
@@ -605,7 +591,7 @@ static void CalcFieldFree(doublecomplex ebuff[static restrict 3], // where to wr
 	a=imExp(-WaveNum*DotProd(box_origin_unif,n)); // a=exp(-ikr0.n)
 	kkk=WaveNum*WaveNum*WaveNum;
 	// the following additional multiplier implements IGT_SO
-	if (ScatRelation==SQ_IGT_SO) kkk*=eta2(n);
+	if (ScatRelation==SQ_IGT_SO) kkk*=(1-kd*kd/24);
 	tmp=-I*a*kkk; // tmp=(-i*k^3)*exp(-ikr0.n)
 	cvMultScal_cmplx(tmp,tbuff,ebuff);
 }
@@ -674,19 +660,19 @@ static void CalcFieldSurf(doublecomplex ebuff[static restrict 3], // where to wr
 		}
 		cvBuildRe(nF,nN);
 		nN[2]*=-1;
-		ki=nF[2]; // real
+		ki=nF[2];
 		if (msubInf) {
 			cs=-1;
 			cp=1;
 		}
 		  // since kt is not further needed, we directly calculate cs and cp (equivalent to kt=ki)
-		else if (cabs(msub-1)<ROUND_ERR && cabs(ki)<SQRT_RND_ERR) cs=cp=0;
+		else if (cabs(msub-1)<ROUND_ERR && fabs(ki)<SQRT_RND_ERR) cs=cp=0;
 		else { // no special treatment here, since other cases, including 90deg-scattering, are taken care above.
 			kt=cSqrtCut(msub*msub - (nN[0]*nN[0]+nN[1]*nN[1]));
 			cs=FresnelRS(ki,kt);
 			cp=FresnelRP(ki,kt,msub);
 		}
-		phSh=imExp(2*WaveNum*hsub*creal(ki)); // assumes real ki
+		phSh=imExpReal(2*WaveNum*hsub*ki);
 	}
 	else { // transmission; here nF[2] is negative
 		// formulae correspond to plane wave incoming from below, but with change ki<->kt
@@ -695,7 +681,7 @@ static void CalcFieldSurf(doublecomplex ebuff[static restrict 3], // where to wr
 			return;
 		}
 		kt=-msub*nF[2];
-		if (cabs(msub-1)<ROUND_ERR && cabs(kt)<SQRT_RND_ERR) ki=kt;
+		if (cabs(msub-1)<ROUND_ERR && fabs(kt)<SQRT_RND_ERR) ki=kt;
 		else ki=cSqrtCut(1 - msub*msub*(nF[0]*nF[0]+nF[1]*nF[1]));
 		// here nN may be complex, but normalized to n.n=1
 		nN[0]=msub*nF[0];
@@ -705,13 +691,13 @@ static void CalcFieldSurf(doublecomplex ebuff[static restrict 3], // where to wr
 		cs=FresnelTS(kt,ki);
 		cp=FresnelTP(kt,ki,1/msub);
 		// coefficient comes from  k0->k in definition of F(n) (in denominator)
-		phSh=msub*cexp(I*WaveNum*hsub*(ki-kt));
+		phSh=msub*imExp(WaveNum*hsub*(ki-kt));
 	}
 #ifndef SPARSE
 	// prepare values of exponents, along each of the coordinates
-	imExp_arr(-kdX*nN[0],boxX,expsX);
-	imExp_arr(-kdY*nN[1],boxY,expsY);
-	imExp_arr(-kdZ*nN[2],local_Nz_unif,expsZ);
+	imExp_arr(-kd*nN[0]*rectScaleX,boxX,expsX);
+	imExp_arr(-kd*nN[1]*rectScaleY,boxY,expsY);
+	imExp_arr(-kd*nN[2]*rectScaleZ,local_Nz_unif,expsZ);
 #endif // !SPARSE
 	/* this piece of code tries to use that usually only x position changes from dipole to dipole, saving a complex
 	 * multiplication seems to be beneficial, even considering bookkeeping overhead; it may not be as good for very
@@ -737,12 +723,12 @@ static void CalcFieldSurf(doublecomplex ebuff[static restrict 3], // where to wr
 		aN=tmpN*expsX[ix];
 		aF=tmpF*expsX[ix];
 #else // sparse mode - the difference is that exponents are not precomputed; cexp is used since argument can be complex
-			expY=cexp(-I*kdY*nN[1]*iy2);
-			expZ=cexp(-I*kdZ*nN[2]*iz2);
+			expY=cexp(-I*kd*nN[1]*iy2*rectScaleY);
+			expZ=cexp(-I*kd*nN[2]*iz2*rectScaleZ);
 			tmpN=expY*expZ;
 			tmpF=expY*conj(expZ);
 		}
-		expX=cexp(-I*kdX*nN[0]*ix);
+		expX=cexp(-I*kd*nN[0]*ix*rectScaleX);
 		aN=tmpN*expX;
 		aF=tmpF*expX;
 #endif // SPARSE
@@ -767,11 +753,11 @@ static void CalcFieldSurf(doublecomplex ebuff[static restrict 3], // where to wr
 		}
 		aN=tmpN*expsX[ix];
 #else // sparse mode - the difference is that exponents are not precomputed; cexp is used since argument can be complex
-			expY=cexp(-I*kdY*nN[1]*iy2);
-			expZ=cexp(-I*kdZ*nN[2]*iz2);
+			expY=cexp(-I*kd*nN[1]*iy2*rectScaleY);
+			expZ=cexp(-I*kd*nN[2]*iz2*rectScaleZ);
 			tmpN=expY*expZ;
 		}
-		expX=cexp(-I*kdX*nN[0]*ix);
+		expX=cexp(-I*kd*nN[0]*ix*rectScaleX);
 		aN=tmpN*expX;
 #endif // SPARSE
 		// sum(P*exp(-ik*r.nN))
@@ -801,14 +787,14 @@ static void CalcFieldSurf(doublecomplex ebuff[static restrict 3], // where to wr
 	if (above) { // ebuff+= [(I-nxn).sum=sum-nF*(nF.sum)] * exp(-2ik*r0*nz), where r0=box_origin_unif
 		cvMultScal_RVec(crDotProd(sumF,nF),nF,t3);
 		cvSubtr(sumF,t3,t3);
-		cvMultScal_cmplx(imExp(-2*WaveNum*creal(ki)*box_origin_unif[2]),t3,t3); // assumes real ki
+		cvMultScal_cmplx(imExpReal(-2*WaveNum*ki*box_origin_unif[2]),t3,t3);
 		cvAdd(t3,ebuff,ebuff);
 	}
 	// ebuff=(-i*k^3)*exp(-ikr0.n)*tbuff, where r0=box_origin_unif
 	// All m-scaling for substrate has been accounted in phSh above
-	doublecomplex sc=-I*WaveNum*WaveNum*WaveNum*cexp(-I*WaveNum*crDotProd(nN,box_origin_unif));
-	// the following additional multiplier implements IGT_SO; when above, it is the same for nF and nN
-	if (ScatRelation==SQ_IGT_SO) sc*=eta2cmplx(nN);
+	doublecomplex sc=-I*WaveNum*WaveNum*WaveNum*imExp(-WaveNum*crDotProd(nN,box_origin_unif));
+	// the following additional multiplier implements IGT_SO
+	if (ScatRelation==SQ_IGT_SO) sc*=(1-kd*kd/24);
 	cvMultScal_cmplx(sc,ebuff,ebuff);
 }
 
@@ -827,15 +813,16 @@ void CalcField(doublecomplex ebuff[static restrict 3], // where to write calcula
 double ExtCross(const double * restrict incPol)
 // Calculate the Extinction cross-section
 {
-	doublecomplex ebuff[3];
-	double sum;
+	doublecomplex ebuff[3],escbuff[3];
+	doublecomplex sum;
 	size_t i;
 
 	if (beamtype==B_PLANE && !surface) {
 		CalcField (ebuff,prop);
-		sum=crDotProd_Re(ebuff,incPol); // incPol is real, so no conjugate is needed
+		//sum=crDotProd_Re(ebuff,incPol); // incPol is real, so no conjugate is needed
+		sum=FOUR_PI*creal(crDotProd(ebuff,incPol)/WaveNum)/creal(WaveNum); // In case of complex WaveNum
 		MyInnerProduct(&sum,double_type,1,&Timing_ScatQuanComm);
-		sum*=FOUR_PI/(WaveNum*WaveNum);
+		//sum*=FOUR_PI/(WaveNum*WaveNum);
 	}
 	/* more general formula; normalization is done assuming the unity amplitude of the electric field in the focal point
 	 * of the beam; It does not comply with ScatRelation SO. So SO is, effectively, replaced by DRAINE when calculating
@@ -843,17 +830,32 @@ double ExtCross(const double * restrict incPol)
 	 */
 	else {
 		sum=0;
-		for (i=0;i<local_nvoid_Ndip;++i) sum+=cDotProd_Im(pvec+3*i,Einc+3*i); // sum{Im(P.E_inc*)}
+		//for (i=0;i<local_nvoid_Ndip;++i) sum+=cDotProd_Im(pvec+3*i,Einc+3*i); // sum{Im(P.E_inc*)}
+		for (i=0;i<local_nvoid_Ndip;++i)  {
+			//cvMultScal_cmplx(chi_inv[0][0],pvec+3*i,ebuff); //Kind of total field
+
+			//cvSubtr(ebuff,Einc+3*i,escbuff); //Kind of scattered field
+
+			//Below are several expressions with the dimension of energy - for testing
+			//sum-=2*cimag((1+0.2*I)*(1+0.2*I))*dipvol*creal(cDotProd(Einc+3*i,escbuff)); //Im(epsilon_1)*Re(E_inc*E_sca*)
+			//sum+=cimag((1+0.2*I)*(1+0.2*I))*dipvol*cvNorm2(escbuff); //Im(epsilon_1)*|E_sca*|^2
+			//sum+=cimag((1+0.2*I)*(1+0.2*I))*dipvol*cvNorm2(ebuff); //Im(epsilon_1)*|E*|^2
+			//sum+=cimag((1+0.2*I)*(1+0.2*I))*dipvol*cvNorm2(Einc+3*i); //Im(epsilon_1)*|E_inc*|^2
+			//sum+=cimag((1+0.4*I)*(1+0.4*I))*dipvol*cvNorm2(ebuff); //Im(epsilon_2)*|E|^2 - tested: it works! Gives right C_abs (same as SQ_FINDIP) if Re(mhost) = 1.
+			//sum+=cDotProd_Im(pvec+3*i,ebuff); //Im(P.E(*)) - tested: it works! Gives right C_abs (even for Re(mhost)!= 1).
+			//sum-=FOUR_PI*cDotProd_Im(pvec+3*i,escbuff); //Im(P.E_sca(*)) - tested: gives the same C_sca as far-field integration if Im(mhost)=0
+			sum+=FOUR_PI*cDotProd_Im(pvec+3*i,Einc+3*i);// sum{Im(P.E_inc*)} - tested: coincides with "S(0)" approach if Im(mhost)=0
+		}
 		MyInnerProduct(&sum,double_type,1,&Timing_ScatQuanComm);
-		sum*=FOUR_PI*WaveNum;
-		/* For cubical dipoles the following satisfies IGT_SO, because this factor is applied in CalcField() and is
-		 * independent of propagation or scattering direction. For rectangular dipoles, it is only approximate but
-		 * expected to be accurate for not very elongated dipoles and/or not very spread out incident field.
+		sum*=creal(WaveNum);
+		/* Surprisingly, this little trick is enough to satisfy IGT_SO, because this factor is applied in CalcField()
+		 * and is independent of propagation or scattering direction. Thus it can be applied to any linear combination
+		 * of plane waves, i.e. any field.
 		 *
-		 * In principle, the situation is similar for SO of full IGT, but there the correction factor depends on the
-		 * propagation direction.even for cubical dipoles
+		 * Unfortunately, the same reasoning fails for SO of full IGT, because there the correction factor does
+		 * (slightly) depend on the propagation direction.
 		 */
-		if (ScatRelation==SQ_IGT_SO) sum*=eta2(prop);
+		if (ScatRelation==SQ_IGT_SO) sum*=(1-kd*kd/24); //Does it have to be changed in case of complex kd?
 	}
 	/* TO ADD NEW BEAM
 	 * The formulae above works only if the amplitude of the beam is unity at the focal point. Either make sure that new
@@ -871,7 +873,7 @@ double AbsCross(void)
 	size_t dip,index;
 	int i,j;
 	unsigned char mat;
-	double sum,temp1,temp2;
+	doublecomplex sum,temp1,temp2;
 	doublecomplex m,m2m1;
 	double mult[MAX_NMAT][3]; // multiplier (possibly anisotropic)
 	double mult1[MAX_NMAT];   // multiplier, which is always isotropic
@@ -903,17 +905,19 @@ double AbsCross(void)
 			/* based on Eq.(31) or equivalently Eq.(58) from the same paper (ref. above)
 			 * summand: Im(P.E(*))=-|P|^2*Im(chi_inv), chi_inv=1/(V*chi)
 			 */
-			temp1 = 2*WaveNum*WaveNum*WaveNum/3;
-			for (i=0;i<Nmat;i++) for (j=0;j<3;j++) mult[i][j]=-cimag(chi_inv[i][j]);
+			// Now (for complex mhost) the summand is somewhat different, but gives the same result
+			for (i=0;i<Nmat;i++) for (j=0;j<3;j++) mult[i][j]=dipvol*cimag(abs_ref_index[i]*abs_ref_index[i])*cAbs2(chi_inv[i][j]);
+			//TO DO: Understand how this (the string above) should be changed for anisotropic ref_index
 			for (dip=0,sum=0;dip<local_nvoid_Ndip;++dip) {
 				mat=material[dip];
 				index=3*dip;
 				for(i=0;i<3;i++) sum+=mult[mat][i]*cAbs2(pvec[index+i]);
 			}
+			sum/=FOUR_PI*creal(mhost)*creal(mhost); //4 Pi and one mhost are not really needed - they are reduced in the end of this function
 			break;
 		case SQ_SO:
 			// !!! the following should never happen
-			if (anisotropy || rectDip) LogError(ONE_POS,"Incompatibility error in AbsCross");
+			if (anisotropy) LogError(ONE_POS,"Incompatibility error in AbsCross");
 			// calculate mult1
 			temp1=kd*kd/6;
 			temp2=FOUR_PI/dipvol;
@@ -929,30 +933,41 @@ double AbsCross(void)
 	}
 	MyInnerProduct(&sum,double_type,1,&Timing_ScatQuanComm);
 	if (surface) sum*=inc_scale;
-	return FOUR_PI*WaveNum*sum;
+	return -FOUR_PI*creal(WaveNum)*sum;
 }
 
 //======================================================================================================================
 
-double DecayCross(void)
+double EnhCross(void)
 // computes total cross section for the dipole incident field; similar to Cext
 // 4pi*k*Im[p0(*).Escat(r0)]
 {
-	double sum;
+	double sum = 0, c = 0, ty, tt;
 	size_t i;
 
-	/* This is a correct expression only _if_ exciting p0 is real, then
-	 * (using G(r1,r2) = G(r2,r1)^T, valid also for surface)
-	 * p0(*).Escat_i(r0) = p0(*).G_0i.p_i = p_i.G_i0.p0(*) = p_i.G_i0.p0 = p_i.Einc_i
-	 * => Im(p0(*).Escat(r0)) = sum{Im(P.E_inc)}
-	 *
-	 * For complex p0 an efficient calculation strategy (not to waste evaluations of interaction) is to compute an array
-	 * of G_i0.p0(*) together with Einc and use it here afterwards.
-	 */
-	sum=0;
-	for (i=0;i<local_nvoid_Ndip;++i) sum+=cimag(cDotProd_conj(pvec+3*i,Einc+3*i)); // sum{Im(P.E_inc)}
-	MyInnerProduct(&sum,double_type,1,&Timing_ScatQuanComm);
-	return FOUR_PI*WaveNum*sum;
+	if (beamtype==B_DIPOLE){
+		/* This is a correct expression only _if_ exciting p0 is real, then
+		 * (using G(r1,r2) = G(r2,r1)^T, valid also for surface)
+		 * p0(*).Escat_i(r0) = p0(*).G_0i.p_i = p_i.G_i0.p0(*) = p_i.G_i0.p0 = p_i.Einc_i
+		 * => Im(p0(*).Escat(r0)) = sum{Im(P.E_inc)}
+		 *
+		 * For complex p0 an efficient calculation strategy (not to waste evaluations of interaction) is to compute an array
+		 * of G_i0.p0(*) together with Einc and use it here afterwards.
+		 */
+		for (i=0;i<local_nvoid_Ndip;++i) sum+=cimag(cDotProd_conj(pvec+3*i,Einc+3*i)); // sum{Im(P.E_inc)}
+		MyInnerProduct(&sum,double_type,1,&Timing_ScatQuanComm);
+	}
+	else if(beamtype==B_ELECTRON){
+		for (i=0;i<local_nvoid_Ndip;++i) sum-=cimag(cDotProd_conj(E1+3*i,pvec+3*i)); // sum{Im(E_1.P)}
+		MyInnerProduct(&sum,double_type,1,&Timing_ScatQuanComm);
+	}
+	printf("sum = %g\n",sum);
+	printf("Wavenum_re = %g\n",creal(WaveNum));
+
+	tt = FOUR_PI*creal(WaveNum)*sum;
+	printf("result = %g\n",tt);
+
+	return tt;
 }
 
 //======================================================================================================================
@@ -1016,7 +1031,7 @@ void CalcAlldir(void)
 	// Calculate field
 	tstart = GET_TIME();
 	npoints = theta_int.N*phi_int.N;
-	if (IFROOT) PRINTFB("Calculating scattered field for the whole solid angle:\n");
+	if (IFROOT) printf("Calculating scattered field for the whole solid angle:\n");
 	for (i=0,point=0;i<theta_int.N;++i) {
 		th=Deg2Rad(theta_int.val[i]);
 		cthet=cos(th);
@@ -1043,7 +1058,7 @@ void CalcAlldir(void)
 			E_ad[index+1]=crDotProd(ebuff,incPolpar);
 			point++;
 			// show progress
-			if (((10*point)%npoints)<10 && IFROOT) PRINTFB(" %d%%",100*point/npoints);
+			if (((10*point)%npoints)<10 && IFROOT) printf(" %d%%",100*point/npoints);
 		}
 	}
 	// accumulate fields
@@ -1060,7 +1075,7 @@ void CalcAlldir(void)
 		for (i=0;i<theta_int.N;++i) if (TestBelowDeg(theta_int.val[i]))
 			for (j=0,point=phi_int.N*i;j<phi_int.N;j++,point++) E2_alldir[point]*=scale;
 	}
-	if (IFROOT) PRINTFB("  done\n");
+	if (IFROOT) printf("  done\n");
 	// timing
 	Timing_EFieldAD = GET_TIME() - tstart;
 	Timing_EField += Timing_EFieldAD;
@@ -1085,7 +1100,7 @@ void CalcScatGrid(const enum incpol which)
 	// set type of cycling through angles
 	if (angles.type==SG_GRID) n=angles.phi.N;
 	else n=1; // angles.type==SG_PAIRS
-	if (IFROOT) PRINTFB("Calculating grid of scattered field:\n");
+	if (IFROOT) printf("Calculating grid of scattered field:\n");
 	// main cycle
 	for (i=0,point=0;i<angles.theta.N;++i) {
 		th=Deg2Rad(angles.theta.val[i]);
@@ -1106,12 +1121,12 @@ void CalcScatGrid(const enum incpol which)
 			Egrid[index+1]=crDotProd(ebuff,incPolpar);
 			point++;
 			// show progress; the value is always from 0 to 100, so conversion to int is safe
-			if (((10*point)%angles.N)<10 && IFROOT) PRINTFB(" %d%%",(int)(100*point/angles.N));
+			if (((10*point)%angles.N)<10 && IFROOT) printf(" %d%%",(int)(100*point/angles.N));
 		}
 	}
 	// accumulate fields; timing
 	Accumulate(Egrid,cmplx_type,2*angles.N,&Timing_EFieldSGComm);
-	if (IFROOT) PRINTFB("  done\n");
+	if (IFROOT) printf("  done\n");
 	Timing_EFieldSG = GET_TIME() - tstart;
 	Timing_EField += Timing_EFieldSG;
 }
@@ -1133,13 +1148,13 @@ double ScaCross(const char *f_suf)
 {
 	TIME_TYPE tstart;
 	char fname[MAX_FNAME];
-	double res;
+	doublecomplex res;
 
 	SnprintfErr(ONE_POS,fname,MAX_FNAME,"%s/"F_LOG_INT_CSCA "%s",directory,f_suf);
 
 	tstart = GET_TIME();
 	Romberg2D(parms,CscaIntegrand,1,&res,fname);
-	res*=FOUR_PI/(WaveNum*WaveNum);
+	res*=FOUR_PI/cAbs2(WaveNum);
 	if (surface) res*=inc_scale;
 	Timing_Integration += GET_TIME() - tstart;
 	return res;
@@ -1360,7 +1375,7 @@ void Frp_mat(double Finc_tot[static restrict 3],double Fsca_tot[static restrict 
 			r = sqrt(r2);
 			vMultScal(1/r,n,n);
 			// Set the scalar products a.b1 and a.b2
-			a = imExp(WaveNum*r);
+			a = imExpReal(WaveNum*r);
 			ab1 = (3/(r2*r2) - I*3*WaveNum/(r*r2) - WaveNum*WaveNum/r2)*a;
 			ab2 = (-WaveNum*WaveNum/r2 + I*WaveNum*WaveNum*WaveNum/r)*a;
 			// Prepare c1 and c2

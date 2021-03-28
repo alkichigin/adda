@@ -1,9 +1,11 @@
-/* All the global variables are declared here
+/* File: vars.c
+ * $Date::                            $
+ * Descr: all the global variables are declared here
  *
- * 'Global' means used in three or more source files. Variables that are used in only two source files are called
- * 'semi-global' and not listed here. They are defined in one file and referenced with 'extern' in another one.
+ *        'Global' means used in three or more source files. Variables that are used in only two source files are called
+ *        'semi-global' and not listed here. They are defined in one file and referenced with 'extern' in another one.
  *
- * Copyright (C) ADDA contributors
+ * Copyright (C) 2006-2014 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
@@ -20,15 +22,15 @@
 // basic variables
 int boxX,boxY,boxZ;       // sizes of box enclosing the particle
 size_t boxXY;             // boxX*boxY, used for indexing
-double gridspace;         // =dsX - DEPRECATED, may only be used in parts incompatible with rectDip
-double dsX,dsY,dsZ;       // dipole sizes along each axis
-double rectScaleX,rectScaleY,rectScaleZ; // relative dipole sizes (scales), in many cases are round numbers
+double gridspace;         // dipole size (d)
+double gridSpaceX,gridSpaceY,gridSpaceZ; // dipole sizes
+double rectScaleX,rectScaleY,rectScaleZ, maxRectScale; // relative dipole sizes (scales) and maximal one
 double dipvol;            // dipole volume
-double kd;                // =kdX - DEPRECATED, may only be used in parts incompatible with rectDip
-double kdX,kdY,kdZ;       // kdX=WaveNum*dsX, ...
+doublecomplex kd;         // k*d=2*PI/dpl
 double ka_eq;             // volume-equivalent size parameter
 double inv_G;             // inverse of equivalent cross section
-double WaveNum;           // wavenumber of incident light
+doublecomplex WaveNum;    // wavenumber of incident light - NOW MAY BE COMPLEX!
+doublecomplex mhost;	  // refractive index of the medium
 double * restrict DipoleCoord;      // vector to hold the coordinates of the dipoles
 double memory;            // total memory usage in bytes
 double memPeak;           // peak memory usage in bytes
@@ -89,6 +91,7 @@ int maxiter;          // maximum number of iterations
 doublecomplex *xvec;  // total electric field on the dipoles
 doublecomplex *pvec;  // polarization of dipoles, also an auxiliary vector in iterative solvers
 doublecomplex * restrict Einc;    // incident field on dipoles
+doublecomplex * restrict E1;    // modified incident field for use in EELS
 
 // scattering at different angles
 int nTheta;                        // number of angles in scattering profile
@@ -139,6 +142,12 @@ double prIncRefl[3],prIncTran[3];
 
 // position of the dipoles; in the very end of make_particle() z-components are adjusted to be relative to the local_z0
 unsigned short * restrict position;
+
+/* holds input vector (on expanded grid) to matvec. Also used as buffer in certain algorithms, that do not call MatVec
+ * (this should be strictly ensured !!!)
+ */
+doublecomplex * restrict Xmatrix;
+
 // auxiliary grids and their partition over processors
 size_t gridX,gridY,gridZ; /* sizes of the 'matrix' X, size_t - to remove type conversions we assume that 'int' is enough
                              for it, but this declaration is to avoid type casting in calculations */

@@ -1,6 +1,8 @@
-/* Inline complex functions, functions on length-3 real and complex vectors, and several auxiliary functions
+/* File: cmplx.h
+ * $Date::                            $
+ * Descr: inline complex functions, functions on length-3 real and complex vectors, and several auxiliary functions
  *
- * Copyright (C) ADDA contributors
+ * Copyright (C) 2006-2008,2010,2012-2014 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
@@ -76,15 +78,15 @@ static inline doublecomplex cSqrtCut(const doublecomplex a)
  */
 {
 	if (cimag(a)==0) {
-		if (creal(a)>=0) return sqrt(creal(a));
-		else return I*sqrt(-creal(a));
+		if (creal(a)>=0) return sqrt(a);
+		else return I*sqrt(-a);
 	}
 	else return csqrt(a);
 }
 
 //======================================================================================================================
 
-static inline doublecomplex imExp(const double arg)
+static inline doublecomplex imExpReal(const double arg)
 /* exponent of imaginary argument Exp(i*arg)
  * !!! should not be used in parameter parsing (table is initialized in VariablesInterconnect())
  */
@@ -99,6 +101,17 @@ static inline doublecomplex imExp(const double arg)
 #else
 	return imExpTable(arg);
 #endif
+}
+
+//======================================================================================================================
+
+static inline doublecomplex imExp(const doublecomplex arg)
+/* exponent of complex argument Exp(i*arg), arg = a + i*b
+ * !!! should not be used in parameter parsing (table is initialized in VariablesInterconnect())
+ */
+{
+	if(cimag(arg)==0) return imExpTable(arg); //this case is needed to make things faster for real argument
+	else return imExpTable(creal(arg))*exp(-cimag(arg));
 }
 
 //======================================================================================================================

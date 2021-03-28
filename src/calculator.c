@@ -1,7 +1,9 @@
-/* All the initialization is done here before actually calculating internal fields,
- * includes calculation of couple constants
+/* File: calculator.c
+ * $Date::                            $
+ * Descr: all the initialization is done here before actually calculating internal fields;
+ *        includes calculation of couple constants
  *
- * Copyright (C) ADDA contributors
+ * Copyright (C) 2006-2010,2013-2014 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
@@ -365,14 +367,14 @@ static inline double ellTheta(const double a)
 
 //======================================================================================================================
 
-static inline double MassaIntegral(const double a,const double b,const double c)
+static inline doublecomplex MassaIntegral(const double a,const double b,const double c)
 // http://iopscience.iop.org/1367-2630/15/6/063013/media/NJP465759suppdata.pdf , p. 11, Eq. (54)
 {
 	double currentSqrt = sqrt(a*a + b*b + c*c);
-	double integral = 0;
+	doublecomplex integral = 0;
 
-	integral -= 4*c*c*atan(a*b/currentSqrt/c);
-	integral -= 4*b*b*atan(a*c/currentSqrt/b);
+	integral -= 4*c*c*catan(a*b/currentSqrt/c);
+	integral -= 4*b*b*catan(a*c/currentSqrt/b);
 	integral += 2*a*b*log(c + currentSqrt);
 	integral += 2*a*c*log(b + currentSqrt);
 	integral += 4*b*c*log(a + currentSqrt);
@@ -398,7 +400,7 @@ static void CoupleConstant(doublecomplex *mrel,const enum incpol which,doublecom
  * calculated from one m) or to another one, then a scalar function is used. See comments in the code for more details.
  */
 {
-	if (rectDip) {
+	if(rectDip) {
 		int i;
 		double a,b,c;
 		double omega;
@@ -445,24 +447,24 @@ static void CoupleConstant(doublecomplex *mrel,const enum incpol which,doublecom
 		for (i=0; i < 3; i++) {
 			if (PolRelation==POL_IGT_SO) {
 				if (i==0) {
-					a=dsX*0.5;
-					b=dsY*0.5;
-					c=dsZ*0.5;
+					a=gridSpaceX*0.5;
+					b=gridSpaceY*0.5;
+					c=gridSpaceZ*0.5;
 				} else if (i==1) {
-					a=dsY*0.5;
-					b=dsX*0.5;
-					c=dsZ*0.5;
+					a=gridSpaceY*0.5;
+					b=gridSpaceX*0.5;
+					c=gridSpaceZ*0.5;
 
 				} else {
-					a=dsZ*0.5;
-					b=dsY*0.5;
-					c=dsX*0.5;
+					a=gridSpaceZ*0.5;
+					b=gridSpaceY*0.5;
+					c=gridSpaceX*0.5;
 				}
-				/* see Enrico Massa 'Discrete-dipole approximation on a rectangular cuboidal point lattice:
+				/* see Enrico Massa 'Discrete-dipole approximation on a rectangular cuboidalpoint lattice:
 				 * considering dynamic depolarization'. Eq. number noted for some lines of code
 				 */
 				omega=4*asin(b*c/sqrt((a*a+b*b)*(a*a+c*c))); // Eq.(10)
-				beta=MassaIntegral(a,b,c); // Eq.(11) beta is the volume integral
+				beta=MassaIntegral(a,b,c); // Eq.(11) beta is three-time integral.
 				res[i]=(-2*omega+WaveNum*WaveNum*beta/2)+I*(16.0/3*WaveNum*WaveNum*WaveNum*a*b*c); // Eq.(9)
 				res[i]=FOUR_PI/(mrel[0]*mrel[0]-1)-res[i]; // Eq.(9)
 				res[i]=8*a*b*c/res[i]; // Eq.(9)
@@ -497,10 +499,11 @@ static void CoupleConstant(doublecomplex *mrel,const enum incpol which,doublecom
 #undef R3_INDEX
 			}
 		}
-		if (!orient_avg && IFROOT) PrintBoth(logfile, "CoupleConstant: "CFORM3V"\n", REIM3V(res));
+		if (!orient_avg && IFROOT) PrintBoth(logfile, "CoupleConstant:"CFORM3V"\n", REIM3V(res));
 	} 
 	else {
-		double ka,kd2,S;
+		double S;
+		doublecomplex ka,kd2;
 		int i;
 		bool asym; // whether polarizability is asymmetric (for isotropic m)
 		const double *incPol;
@@ -529,7 +532,7 @@ static void CoupleConstant(doublecomplex *mrel,const enum incpol which,doublecom
 				case POL_IGT_SO: res[i]=polMplusRR(SO_B1*kd2,mrel[i]); break;
 				case POL_LAK: // M=(8pi/3)[(1-ika)exp(ika)-1], a - radius of volume-equivalent (to cubical dipole) sphere
 					ka=LAK_C*kd;
-					res[i]=polM(2*FOUR_PI_OVER_THREE*((1-I*ka)*imExp(ka)-1),mrel[i]);
+					res[i]=polM(2*FOUR_PI_OVER_THREE*((1-I*ka)*imExpReal(ka)-1),mrel[i]);
 					break;
 				case POL_LDR:
 					if (avg_inc_pol) S=0.5*(1-DotProdSquare(prop,prop));
@@ -573,11 +576,11 @@ static void CoupleConstant(doublecomplex *mrel,const enum incpol which,doublecom
 			}
 		}
 		if (asym || anisotropy) {
-			if (!orient_avg && IFROOT) PrintBoth(logfile, "CoupleConstant: "CFORM3V"\n",REIM3V(res));
+			if (!orient_avg && IFROOT) PrintBoth(logfile, "CoupleConstant:"CFORM3V"\n",REIM3V(res));
 		}
 		else {
 			res[2]=res[1]=res[0];
-			if (!orient_avg && IFROOT) PrintBoth(logfile,"CoupleConstant: "CFORM"\n",REIM(res[0]));
+			if (!orient_avg && IFROOT) PrintBoth(logfile,"CoupleConstant:"CFORM"\n",REIM(res[0]));
 		}
 	}
 }
@@ -624,7 +627,7 @@ static void calculate_one_orientation(double * restrict res)
 
 	// calculate scattered field for y - polarized incident light
 	if (IFROOT) {
-		PRINTFB("\nhere we go, calc Y\n\n");
+		printf("\nhere we go, calc Y\n\n");
 		if (!orient_avg) fprintf(logfile,"\nhere we go, calc Y\n\n");
 	}
 	InitCC(INCPOL_Y);
@@ -640,7 +643,7 @@ static void calculate_one_orientation(double * restrict res)
 		if(CalculateE(INCPOL_Y,CE_NORMAL)==CHP_EXIT) return;
 
 		if (IFROOT) {
-			PRINTFB("\nhere we go, calc X\n\n");
+			printf("\nhere we go, calc X\n\n");
 			if (!orient_avg) fprintf(logfile,"\nhere we go, calc X\n\n");
 		}
 		if (PolRelation==POL_LDR && !avg_inc_pol) InitCC(INCPOL_X);
@@ -655,7 +658,7 @@ static void calculate_one_orientation(double * restrict res)
 	D("MuellerMatrix finished");
 	if (IFROOT && orient_avg) {
 		tstart=GET_TIME();
-		if (store_mueller) PRINTFB("\nError of alpha integration (Mueller) is "GFORMDEF"\n",
+		if (store_mueller) printf("\nError of alpha integration (Mueller) is "GFORMDEF"\n",
 			Romberg1D(parms_alpha,block_theta,muel_alpha,res+2));
 		memcpy(res,muel_alpha-2,2*sizeof(double));
 		D("Integration over alpha completed on root");
@@ -701,6 +704,7 @@ static void AllocateEverything(void)
 		MALLOC_VECTOR(rvec,complex,local_nRows,ALL);
 		MALLOC_VECTOR(pvec,complex,local_nRows,ALL);
 		MALLOC_VECTOR(Einc,complex,local_nRows,ALL);
+		if(beamtype == B_ELECTRON) MALLOC_VECTOR(E1,complex,local_nRows,ALL);
 		MALLOC_VECTOR(Avecbuffer,complex,local_nRows,ALL);
 	}
 	memory+=5*tmp;
@@ -868,7 +872,7 @@ static void AllocateEverything(void)
 
 void FreeEverything(void)
 /* frees all allocated vectors; should not be called in prognosis mode, since arrays are not
- * actually allocated. Also called from matvec.c and oclmatvec.c in PRECISE_TIMING.
+ * actually allocated. Also called from matvec.c in PRECISE_TIMING.
  */
 {
 	FreeInteraction();
@@ -886,6 +890,7 @@ void FreeEverything(void)
 	Free_cVector(rvec);
 	Free_cVector(pvec);
 	Free_cVector(Einc);
+	if(beamtype == B_ELECTRON) Free_cVector(E1);
 	Free_cVector(Avecbuffer);
 	
 	/* The following can be automated to some extent, either using the information from structure array 'params' in
@@ -983,7 +988,7 @@ void Calculator (void)
 		block_theta= 16*(size_t)nTheta;
 		if (TestExtendThetaRange()) nTheta=2*(nTheta-1);
 	}
-	else block_theta=dtheta_deg=dtheta_rad=0;
+	else dtheta_deg=dtheta_rad=block_theta=0;
 	finish_avg=false;
 	// Do preliminary setup for MatVec
 	TIME_TYPE startInitInt=GET_TIME();

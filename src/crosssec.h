@@ -1,6 +1,8 @@
-/* Definitions of functions for calculation of different measured quantities
+/* File: crosssec.h
+ * $Date::                            $
+ * Descr: definitions of functions for calculation of different measured quantities
  *
- * Copyright (C) ADDA contributors
+ * Copyright (C) 2006,2008,2010,2012-2013 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
@@ -23,6 +25,7 @@ void CalcField(doublecomplex ebuff[static restrict 3],const double n[static rest
 void InitRotation(void);
 double ExtCross(const double * restrict incPol);
 double AbsCross(void);
+double EnhCross(void);
 double DecayCross(void);
 double ScaCross(const char *f_suf);
 void ReadAlldirParms(const char * restrict fname);

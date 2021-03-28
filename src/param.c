@@ -1,7 +1,9 @@
-/* Initialization, parsing and handling of input parameters; also printout general information;
- * contains file locking routines
+/* File: param.c
+ * $Date::                            $
+ * Descr: initialization, parsing and handling of input parameters; also printout general information; contains file
+ *        locking routines
  *
- * Copyright (C) ADDA contributors
+ * Copyright (C) 2006-2014 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
@@ -36,7 +38,7 @@
 #include <string.h>
 #include <time.h>
 
-#ifdef CLFFT
+#ifdef CLFFT_AMD
 /* One can also include clFFT.h (the only recommended public header), which can be redundant, but more portable.
  * However, version macros are not documented anyway (in the manual), so there seem to be no perfectly portable way to
  * obtain them.
@@ -49,11 +51,6 @@
  * following header.
  */
 #	include <clBLAS.version.h>
-#endif
-
-#ifdef WINDOWS
-#	include <windows.h> // all windows functions need this
-#	include <io.h>      // for _isatty
 #endif
 
 #ifndef NO_GITHASH
@@ -84,10 +81,7 @@
 
 // GLOBAL VARIABLES
 
-opt_index opt;     // main option index; it is also defined as extern in param.h
-#ifdef WINDOWS
-bool emulLinebuf;  // whether to emulate line buffering of stdout, defined as extern in io.h
-#endif
+opt_index opt; // main option index; it is also defined as extern in param.h
 
 // SEMI-GLOBAL VARIABLES
 
@@ -124,6 +118,7 @@ double polNlocRp;            // Gaussian width for non-local polarizability
 const char *alldir_parms;    // name of file with alldir parameters
 const char *scat_grid_parms; // name of file with parameters of scattering grid
 // used in crosssec.c
+doublecomplex abs_ref_index[MAX_NMAT];  // a set of absolute refractive indexes
 double incPolX_0[3],incPolY_0[3]; // initial incident polarizations (in lab RF)
 enum scat ScatRelation;           // type of formulae for scattering quantities
 // used in GenerateB.c
@@ -178,7 +173,8 @@ static const char *avg_parms;   // name of file with orientation averaging param
 static const char *exename;     // name of executable (adda, adda.exe, adda_mpi,...)
 static int Nmat_given;          // number of refractive indices given in the command line
 static enum sym sym_type;       // how to treat particle symmetries
-static int sobuf;               // mode for stdout buffering
+double rel_lambda;				// wavelength in the surrounding medium
+
 /* The following '..._used' flags are, in principle, redundant, since the structure 'options' contains the same flags.
  * However, the latter can't be easily addressed by the option name (a search over the whole options is required).
  * When thinking about adding a new one, first consider using UNDEF machinery instead
@@ -187,7 +183,6 @@ static bool prop_used;          // whether '-prop ...' was used in the command l
 static bool orient_used;        // whether '-orient ...' was used in the command line
 static bool yz_used;            // whether '-yz ...' was used in the command line
 static bool scat_plane_used;    // whether '-scat_plane ...' was used in the command line
-static bool so_buf_used;        // whether '-so_buf ...' was used in the command line
 
 /* TO ADD NEW COMMAND LINE OPTION
  * If you need new variables or flags to implement effect of the new command line option, define them here. If a
@@ -236,6 +231,10 @@ static const struct subopt_struct beam_opt[]={
 	{"dipole","<x> <y> <z>","Field of a unit point dipole placed at x, y, z coordinates (in laboratory reference "
 		"frame). All arguments are in um. Orientation of the dipole is determined by -prop command line option."
 		"Implies '-scat_matr none'. If '-surf' is used, dipole position should be above the surface.",3,B_DIPOLE},
+	{"electron","<energy> <x> <y> <z> <m_host>","Field of an electron with energy <energy> moving along z-axis through "
+		"point (<x>,<y>,<z>) (in laboratory reference frame) in the host medium with real refractive index "
+		"<m_host>. Energy argument is in keV, all coordinate arguments are in nm. Propagation direction of "
+		"the beam is determined by -prop command line option.",4,B_ELECTRON},
 	{"lminus","<width> [<x> <y> <z>]","Simplest approximation of the Gaussian beam. The beam width is obligatory and "
 		"x, y, z coordinates of the center of the beam (in laboratory reference frame) are optional (zero, by"
 		" default). All arguments are in um.",UNDEF,B_LMINUS},
@@ -365,6 +364,7 @@ PARSE_FUNC(jagged);
 PARSE_FUNC(lambda);
 PARSE_FUNC(m);
 PARSE_FUNC(maxiter);
+PARSE_FUNC(mhost);
 PARSE_FUNC(no_reduced_fft);
 PARSE_FUNC(no_vol_cor);
 PARSE_FUNC(ntheta);
@@ -388,7 +388,6 @@ PARSE_FUNC(sg_format);
 #endif
 PARSE_FUNC(shape);
 PARSE_FUNC(size);
-PARSE_FUNC(so_buf);
 PARSE_FUNC(store_beam);
 PARSE_FUNC(store_dip_pol);
 PARSE_FUNC(store_force);
@@ -413,8 +412,8 @@ static struct opt_struct options[]={
 		"integral scattering quantities.\n"
 		"Default: "FD_ALLDIR_PARMS,1,NULL},
 	{PAR(anisotr),"","Specifies that refractive index is anisotropic (its tensor is limited to be diagonal in particle "
-		"reference frame). '-m' then accepts 6 arguments per each domain. Can not be used with '-pol cldr', all SO "
-		"formulations, and '-rect_dip'.",0,NULL},
+		"reference frame). '-m' then accepts 6 arguments per each domain. Can not be used with CLDR polarizability and "
+		"all SO formulations.",0,NULL},
 	{PAR(asym),"","Calculate the asymmetry vector. Implies '-Csca' and '-vec'",0,NULL},
 	{PAR(beam),"<type> [<args>]","Sets the incident beam, either predefined or 'read' from file. All parameters of "
 		"predefined beam types (if present) are floats.\n"
@@ -432,7 +431,7 @@ static struct opt_struct options[]={
 	{PAR(Csca),"","Calculate scattering cross section (by integrating the scattered field)",0,NULL},
 	{PAR(dir),"<dirname>","Sets directory for output files.\n"
 		"Default: constructed automatically",1,NULL},
-	{PAR(dpl),"<arg>","Sets parameter 'dipoles per lambda', float.\n"
+	{PAR(dpl),"<arg>","Sets parameter 'dipoles per lambda' (along the x-axis), float.\n"
 		"Default: 10|m|, where |m| is the maximum of all given refractive indices.",1,NULL},
 	{PAR(eps),"<arg>","Specifies the stopping criterion for the iterative solver by setting the relative norm of the "
 		"residual 'epsilon' to reach. <arg> is an exponent of base 10 (float), i.e. epsilon=10^(-<arg>).\n"
@@ -441,7 +440,7 @@ static struct opt_struct options[]={
 		"this option specifies the volume-equivalent size parameter. Can not be used together with '-size'. Size is "
 		"defined by some shapes themselves, then this option can be used to override the internal specification and "
 		"scale the shape.\n"
-		"Default: determined by the value of '-size' or by '-grid', '-dpl', '-lambda', and '-rect_dip'.",1,NULL},
+		"Default: determined by the value of '-size' or by '-grid', '-dpl', and '-lambda'.",1,NULL},
 #ifdef OPENCL
 	{PAR(gpu),"<index>","Specifies index of GPU that should be used (starting from 0). Relevant only for OpenCL "
 		"version of ADDA, running on a system with several GPUs.\n"
@@ -450,8 +449,7 @@ static struct opt_struct options[]={
 #ifndef SPARSE
 	{PAR(granul),"<vol_frac> <diam> [<dom_number>]","Specifies that one particle domain should be randomly filled with "
 		"spherical granules with specified diameter <diam> and volume fraction <vol_frac>. Domain number to fill is "
-		"given by the last optional argument. Algorithm may fail for volume fractions > 30-50%. Cannot be used with "
-		"'-rect_dip'.\n"
+		"given by the last optional argument. Algorithm may fail for volume fractions > 30-50%.\n"
 		"Default <dom_number>: 1",UNDEF,NULL},
 #endif // !SPARSE
 	{PAR(grid),"<nx> [<ny> <nz>]","Sets dimensions of the computation grid (any positive integers). In most "
@@ -459,7 +457,7 @@ static struct opt_struct options[]={
 		"scatterer). This command line option is not relevant when particle geometry is read from a file ('-shape "
 		"read'). If '-jagged' option is used the grid dimension is effectively multiplied by the specified number.\n"
 		"Default: 16 (if neither '-size' nor '-eq_rad' are specified) or defined by\n"
-		"         '-size' or '-eq_rad', '-lambda', '-dpl', and '-rect_dip'.",UNDEF,NULL},
+		"         '-size' or '-eq_rad', '-lambda', and '-dpl'.",UNDEF,NULL},
 	{PAR(h),"[<opt> [<subopt>]]","Shows help. If used without arguments, ADDA shows a list of all available command "
 		"line options. If first argument is specified, help on specific command line option <opt> is shown (only the "
 		"name of the option should be given without preceding dash). For some options (e.g. '-beam' or '-shape') "
@@ -483,10 +481,10 @@ static struct opt_struct options[]={
 		"Sets prescription to calculate the interaction term.\n"
 		"'fcd' - Filtered Coupled Dipoles - requires dpl to be larger than 2.\n"
 		"'fcd_st' - static (long-wavelength limit) version of FCD.\n"
-		"'igt' - Integration of Green's Tensor. Its parameters are: <lim> - maximum distance (in units of the largest "
-		"dipole size), for which integration is used, (default: infinity); <prec> - minus decimal logarithm of "
-		"relative error of the integration, i.e. epsilon=10^(-<prec>) (default: the same as the argument (or default "
-		"value) of '-eps' command line option).\n"
+		"'igt' - Integration of Green's Tensor. Its parameters are: <lim> - maximum distance (in largest dipole "
+		"dimensions), for which integration is used, (default: infinity); <prec> - minus decimal logarithm of relative "
+		"error of the integration, i.e. epsilon=10^(-<prec>) (default: the same as the argument (or default value) of "
+		"'-eps' command line option).\n"
 #ifdef NO_FORTRAN
 		"!!! 'igt' relies on Fortran sources that were disabled at compile time.\n"
 #endif
@@ -499,7 +497,6 @@ static struct opt_struct options[]={
 #ifdef SPARSE
 		"!!! All options except 'poi' incur a significant slowing down in sparse mode.\n"
 #endif
-		"Only poi and igt can be used with '-rect_dip'.\n"
 		"Default: poi",UNDEF,NULL},
 		/* TO ADD NEW INTERACTION FORMULATION
 		 * Modify string constants after 'PAR(int)': add new argument (possibly with additional sub-arguments) to list
@@ -541,6 +538,8 @@ static struct opt_struct options[]={
 		"Default: 1.5 0",UNDEF,NULL},
 	{PAR(maxiter),"<arg>","Sets the maximum number of iterations of the iterative solver, integer.\n"
 		"Default: very large, not realistic value",1,NULL},
+	{PAR(mhost),"<mhost_Re> <mhost_Im>","Complex refractive index of the host medium.\n"
+			"Default: 1+0i",2,NULL},
 	{PAR(no_reduced_fft),"","Do not use symmetry of the interaction matrix to reduce the storage space for the "
 		"Fourier-transformed matrix.",0,NULL},
 	{PAR(no_vol_cor),"","Do not use 'dpl (volume) correction'. If this option is given, ADDA will try to match size of "
@@ -582,7 +581,6 @@ static struct opt_struct options[]={
 		"'nloc_av' - same as 'nloc' but based on averaging of Gh over the dipole volume.\n"
 		"'rrc' - Radiative Reaction Correction (added to CM).\n"
 		"'so' - under development and incompatible with '-anisotr'.\n"
-		"Only poi,cldr, and igt_so can be used with '-rect_dip'.\n"
 		"Default: ldr (without averaging) or cldr (for -rect_dip).",UNDEF,NULL},
 		/* TO ADD NEW POLARIZABILITY FORMULATION
 		 * Modify string constants after 'PAR(pol)': add new argument (possibly with additional sub-arguments) to list
@@ -595,9 +593,7 @@ static struct opt_struct options[]={
 		"Default: 0 0 1",3,NULL},
 	{PAR(recalc_resid),"","Recalculate residual at the end of iterative solver.",0,NULL},
 	{PAR(rect_dip),"<x> <y> <z>","Use rectangular-cuboid dipoles. Three arguments are the relative dipole sizes along "
-		"the corresponding axes. Absolute scale is irrelevant, i.e. '1 2 2' is equivalent to '0.5 1 1'. Cannot be used "
-		"with '-anisotr', '-granul', '-scat so'. The compatible polarizability and interaction-term formulations are "
-		"also limited.\n"
+		"the corresponding axes. Absolute scale is not relevant, i.e. '1 2 2' is equivalent to '0.5 1 1'.\n"
 		"Default: 1 1 1",3,NULL},
 #ifndef SPARSE
 	{PAR(save_geom),"[<filename>]","Save dipole configuration to a file <filename> (a path relative to the output "
@@ -611,7 +607,7 @@ static struct opt_struct options[]={
 		"'dr' - (by Draine) standard formulation for point dipoles\n"
 		"'fin' - slightly different one, based on a radiative correction for a finite dipole.\n"
 		"'igt_so' - second order in kd approximation to Integration of Green's Tensor.\n"
-		"'so' - under development and incompatible with '-anisotr' and '-rect_dip'.\n"
+		"'so' - under development and incompatible with '-anisotr'.\n"
 		"Default: dr",1,NULL},
 	{PAR(scat_grid_inp),"<filename>","Specifies a file with parameters of the grid of scattering angles for "
 		"calculating Mueller matrix (possibly integrated over 'phi').\n"
@@ -640,11 +636,7 @@ static struct opt_struct options[]={
 		"is used, this option specifies the 'size parameter' of the computational grid. Can not be used together with "
 		"'-eq_rad'. Size is defined by some shapes themselves, then this option can be used to override the internal "
 		"specification and scale the shape.\n"
-		"Default: determined by the value of '-eq_rad' or by '-grid', '-dpl', '-lambda', and '-rect_dip'.",1,NULL},
-	{PAR(so_buf),"{no|line|full}","Manually sets the buffering of stdout: no buffer, a single line, or using a large "
-		"buffer (typically, 0.5-4 KB).\n"
-		"Default: 'line' or 'full' when the stdout is printed directly to a terminal or is redirected, respectively",
-		1,NULL},
+		"Default: determined by the value of '-eq_rad' or by '-grid', '-dpl', and '-lambda'.",1,NULL},
 	{PAR(store_beam),"","Save incident beam to a file",0,NULL},
 	{PAR(store_dip_pol),"","Save dipole polarizations to a file",0,NULL},
 	{PAR(store_force),"","Calculate the radiation force on each dipole. Implies '-Cpr'",0,NULL},
@@ -732,8 +724,8 @@ void PrintErrorHelp(const char * restrict fmt, ... )
 				"Type '%s -h %s' for details\n",optname,use,exename,optname);
 		}
 		WrapLines(msg);
-		fflush(NULL);
 		fprintf(stderr,"%s",msg);
+		fflush(stderr);
 	}
 	// wait for root to generate an error message
 	Synchronize();
@@ -754,7 +746,6 @@ static void ATT_NORETURN ATT_PRINTF(1,2) PrintErrorHelpSafe(const char * restric
 	if (IFROOT) {
 		// produce error message
 		va_start(args,fmt);
-		fflush(NULL);
 		fprintf(stderr,"ERROR: ");
 		vfprintf(stderr,fmt,args);
 		fprintf(stderr,"\n");
@@ -770,6 +761,7 @@ static void ATT_NORETURN ATT_PRINTF(1,2) PrintErrorHelpSafe(const char * restric
 			fprintf(stderr,"Usage: -%s %s\n"
 			               "Type '%s -h %s' for details\n",optname,use,exename,optname);
 		}
+		fflush(stderr);
 	}
 	// wait for root to generate an error message
 	Synchronize();
@@ -1066,7 +1058,7 @@ PARSE_FUNC(eps)
 PARSE_FUNC(eq_rad)
 {
 	ScanDoubleError(argv[1],&a_eq);
-	TestPositive(a_eq,"equivalent radius");
+	TestPositive(a_eq,"dpl");
 }
 #ifdef OPENCL
 PARSE_FUNC(gpu)
@@ -1286,15 +1278,25 @@ PARSE_FUNC(m)
 	for (i=0;i<Nmat;i++) {
 		ScanDoubleError(argv[2*i+1],&mre);
 		ScanDoubleError(argv[2*i+2],&mim);
-		ref_index[i] = mre + I*mim;
-		if (ref_index[i]==1) PrintErrorHelp("Given refractive index #%d is that of vacuum, which is not supported. "
-			"Consider using, for instance, 1.0001 instead.",i+1);
+		abs_ref_index[i] = mre + I*mim;
 	}
 }
 PARSE_FUNC(maxiter)
 {
 	ScanIntError(argv[1],&maxiter);
 	TestPositive_i(maxiter,"maximum number of iterations");
+}
+PARSE_FUNC(mhost)
+{
+	double mre,mim;
+
+	if (Narg!=2) NargError(Narg,"two");
+	ScanDoubleError(argv[1],&mre);
+	ScanDoubleError(argv[2],&mim);
+	mhost = mre + I*mim;
+	TestNonNegative(mre,"real part of the medium refractive index");
+	TestNonNegative(mim,"imaginary part of the medium refractive index");
+	TestPositive(cabs(mhost),"absolute value of the medium refractive index");
 }
 PARSE_FUNC(no_reduced_fft)
 {
@@ -1513,14 +1515,6 @@ PARSE_FUNC(size)
 	ScanDoubleError(argv[1],&sizeX);
 	TestPositive(sizeX,"particle size");
 }
-PARSE_FUNC(so_buf)
-{
-	if (strcmp(argv[1],"no")==0) sobuf=_IONBF;
-	else if (strcmp(argv[1],"line")==0) sobuf=_IOLBF;
-	else if (strcmp(argv[1],"full")==0) sobuf=_IOFBF;
-	else NotSupported("Buffering mode for stdout",argv[1]);
-	so_buf_used=true;
-}
 PARSE_FUNC(store_beam)
 {
 	store_beam = true;
@@ -1580,7 +1574,7 @@ PARSE_FUNC(test)
 }
 PARSE_FUNC(V)
 {
-	char copyright[]="\n\nCopyright (C) 2006-2021 ADDA contributors\n"
+	char copyright[]="\n\nCopyright (C) 2006-2020 ADDA contributors\n"
 		"This program is free software; you can redistribute it and/or modify it under the terms of the GNU General "
 		"Public License as published by the Free Software Foundation; either version 3 of the License, or (at your "
 		"option) any later version.\n\n"
@@ -1590,30 +1584,29 @@ PARSE_FUNC(V)
 		"You should have received a copy of the GNU General Public License along with this program. If not, see "
 		"<http://www.gnu.org/licenses/>.\n";
 	char ccver_str[MAX_LINE];
+#if defined(__DECC)
+	char cctype;
+#elif defined(__BORLANDC__)
+	int ccver;
+#endif
 	size_t num;
 	int bits,len;
 
 	if (IFROOT) {
 		// compiler & version (works only for selected compilers)
-		// Intel (classic)
-#ifdef __INTEL_COMPILER
+		// Intel
+#if defined(__ICC) || defined(__INTEL_COMPILER)
 #	define COMPILER "Intel"
-// in the end of 2020 the version was incremented from 19 to 2021, while __INTEL_COMPILER from 1900 to 2021
-#	if __INTEL_COMPILER >= 2000
-		sprintf(ccver_str,"%d.%d",__INTEL_COMPILER,__INTEL_COMPILER_UPDATE);
-#	elif __INTEL_COMPILER >= 1400
-		sprintf(ccver_str,"%d.%d.%d",__INTEL_COMPILER/100,__INTEL_COMPILER%100,__INTEL_COMPILER_UPDATE);
+#	ifdef __INTEL_COMPILER
+#		define CCVERSION __INTEL_COMPILER
 #	else
-		sprintf(ccver_str,"%d.%d",__INTEL_COMPILER/100,__INTEL_COMPILER%100);
+#		define CCVERSION __ICC
 #	endif
-		// Intel oneAPI (LLVM); there is icx and dpcpp, but the latter doesn't support c99
-#elif defined (__INTEL_LLVM_COMPILER)
-#	define COMPILER "Intel oneAPI"
-		sprintf(ccver_str,"%d.%d",__INTEL_LLVM_COMPILER/100,__INTEL_LLVM_COMPILER%100);
+		sprintf(ccver_str,"%d.%d",CCVERSION/100,CCVERSION%100);
 		// DEC (Compaq)
 #elif defined(__DECC)
 #	define COMPILER "DEC (Compaq)"
-		char cctype=(__DECC_VER/10000)%10;
+		cctype=(__DECC_VER/10000)%10;
 		if (cctype==6) cctype='T';
 		else if (cctype==8) cctype='S';
 		else if (cctype==9) cctype='V';
@@ -1622,7 +1615,6 @@ PARSE_FUNC(V)
 		// Borland
 #elif defined(__BORLANDC__)
 #	define COMPILER "Borland"
-		int ccver;
 		sprintf(ccver_str,"%x",__BORLANDC__);
 		sscanf(ccver_str,"%d",&ccver);
 		sprintf(ccver_str,"%d.%d",ccver/100,ccver%100);
@@ -1650,9 +1642,6 @@ PARSE_FUNC(V)
 		printf("ADDA v."ADDA_VERSION"\n");
 #endif
 #ifdef OPENCL
-/* The following is not necessarily accurate, since in many build environments the header can be of larger version than
- * the library. Moreover, we are not testing for more recent versions, since we declare target version 1.2.
- */
 #	if defined(CL_VERSION_1_2)
 #		define OCL_VERSION "1.2"
 #	elif defined(CL_VERSION_1_1)
@@ -1663,24 +1652,20 @@ PARSE_FUNC(V)
 #		error "OpenCL version not recognized"
 #	endif
 		printf("GPU-accelerated version conforming to OpenCL standard "OCL_VERSION"\n");
-#	ifdef CLFFT
+#	ifdef CLFFT_AMD
 		printf("Linked to clFFT version %d.%d.%d\n",clfftVersionMajor,clfftVersionMinor,clfftVersionPatch);
 #	endif
 #	ifdef OCL_BLAS
-		printf("Linked to clBLAS version %d.%d.%d\n",clblasVersionMajor,clblasVersionMinor,clblasVersionPatch);
+		printf("Linked to clBLAS version %d.%d.%d\n",clblasVersionMajor,clblasVersionMinor,
+			clblasVersionPatch);
 #	endif
 #elif defined(ADDA_MPI)
 		// Version of MPI standard is specified
 		printf("Parallel version conforming to MPI standard %d.%d\n",RUN_MPI_VER_REQ,RUN_MPI_SUBVER_REQ);
-#	ifdef MPICH2 // actually an older version of MPICH, compared to MPICH version 3
+#	ifdef MPICH2
 		printf("Linked to MPICH2 version "MPICH2_VERSION"\n");
-#	elif defined(MPICH)
-		printf("Linked to MPICH version "MPICH_VERSION"\n");
 #	elif defined(OPEN_MPI)
-		printf("Linked to Open MPI version %d.%d.%d\n",OMPI_MAJOR_VERSION,OMPI_MINOR_VERSION,OMPI_RELEASE_VERSION);
-#	elif defined(MSMPI_VER)
-		// Microsoft MPI uses hex version number (weird)
-		printf("Linked to Microsoft MPI version 0x%x\n",MSMPI_VER);
+		printf("Linked to OpenMPI version %d.%d.%d\n",OMPI_MAJOR_VERSION,OMPI_MINOR_VERSION,OMPI_RELEASE_VERSION);
 #	endif
 		// Additional debug information about MPI implementation
 #	ifndef SUPPORT_MPI_BOOL
@@ -1709,8 +1694,6 @@ PARSE_FUNC(V)
 		printf("      using MinGW-64 environment version "__MINGW64_VERSION_STR"\n");
 #elif defined(__MINGW32_VERSION)
 		printf("      using MinGW-32 environment version %g\n",__MINGW32_VERSION);
-#elif ( defined(__INTEL_COMPILER) || defined (__INTEL_LLVM_COMPILER) ) && defined(_MSC_VER)
-		printf("      using Microsoft Visual Studio environment version %d.%d\n",_MSC_VER/100,_MSC_VER%100);
 #endif
 		// extra build flags - can it be shortened by some clever defines?
 		const char build_opts[]=
@@ -1769,6 +1752,7 @@ PARSE_FUNC(V)
 	// exit
 	Stop(EXIT_SUCCESS);
 #undef COMPILER
+#undef CCVERSION
 #undef COMPILER_UNKNOWN
 #undef BUILD_OPTS_SIZE
 }
@@ -1894,9 +1878,10 @@ void InitVariables(void)
 	orient_used=false;
 	directory="";
 	lambda=TWO_PI;
+	mhost=1;
 	// initialize ref_index of scatterer
 	Nmat=Nmat_given=1;
-	ref_index[0]=1.5;
+	abs_ref_index[0]=1.5;
 	// initialize to null to determine further whether it is initialized
 	logfile=NULL;
 	boxX=boxY=boxZ=UNDEF;
@@ -1910,7 +1895,7 @@ void InitVariables(void)
 	shapename="sphere";
 	store_int_field=false;
 	store_dip_pol=false;
-	PolRelation=(enum pol)UNDEF;
+	PolRelation=UNDEF;
 	avg_inc_pol=false;
 	ScatRelation=SQ_DRAINE;
 	IntRelation=G_POINT_DIP;
@@ -1965,18 +1950,15 @@ void InitVariables(void)
 	recalc_resid=false;
 	surface=false;
 	msubInf=false;
-	ReflRelation=(enum refl)UNDEF;
+	ReflRelation=UNDEF;
 	// sometimes the following two are left uninitialized
 	beam_fnameX=NULL;
 	infi_fnameX=NULL;
 	rectScaleX=1.0;
 	rectScaleY=1.0;
 	rectScaleZ=1.0;
-	so_buf_used=false;
-	sobuf=0; // should not be tested against this default value (as it may conflict with existing modes)
-#ifdef WINDOWS
-	emulLinebuf=false;
-#endif
+	maxRectScale=1;
+
 #ifdef OPENCL
 	gpuInd=0;
 #endif
@@ -2041,26 +2023,16 @@ void VariablesInterconnect(void)
 {
 	double temp;
 
-	// the following should be done before any output to stdout
-#ifdef WINDOWS
-	/* on Windows we emulate default POSIX behavior. The default system behavior is modified only if required for this
-	 * emulation or requested by user. We assume that _IOLBF is (almost) equivalent to _IOFBF in setvbuf (as specified
-	 * in documentation of Microsoft C runtime library).
-	 */
-	if (so_buf_used) {
-		setvbuf(stdout,NULL,sobuf,BUFSIZ);
-		if (sobuf==_IOLBF) emulLinebuf=true;
-	}
-	else if(_isatty(_fileno(stdout))) {
-		setvbuf(stdout,NULL,_IOLBF,BUFSIZ);
-		emulLinebuf=true;
-	}
-#else // otherwise, we set buffer only if explicitly specified by the user
-	if (so_buf_used) setvbuf(stdout,NULL,sobuf,BUFSIZ);
-#endif
-
 	// initialize WaveNum ASAP
-	WaveNum = TWO_PI/lambda;
+	WaveNum = TWO_PI*mhost/lambda;
+	//relative lambda (normalized to the mhost):
+	if(creal(mhost)!=0) rel_lambda=lambda/creal(mhost); else rel_lambda=lambda; //the second case is weird but the only choice
+	//normalizes the refractive index to the mhost:
+	for (int i=0;i<Nmat;i++) {
+		ref_index[i]=abs_ref_index[i]/mhost;
+		if (ref_index[i]==1) PrintErrorHelp("Given refractive index #%d is that of surrounding medium, which is not supported. "
+			"Consider using, for instance, 1.0001*mhost instead.",i+1);
+	}
 	// set default incident direction, which is +z for all configurations
 	if (!prop_used) {
 		prop_0[0]=prop_0[1]=0;
@@ -2124,6 +2096,8 @@ void VariablesInterconnect(void)
 		scat_grid=false;
 	}
 	if (rectDip) {
+		maxRectScale=MAX(rectScaleX,rectScaleY);
+		MAXIMIZE(maxRectScale,rectScaleZ);
 		if (PolRelation!=POL_CLDR && PolRelation!=POL_CM && PolRelation!=POL_IGT_SO)
 			PrintError("The specified polarizability formulation is designed only for cubical dipoles. Currently, only "
 			"the following formulations can be used with rectangular dipoles: cm, cldr, and igt_so");
@@ -2132,7 +2106,6 @@ void VariablesInterconnect(void)
 			"cases you should use '-rect_dip ... -int igt ... -pol igt_so'");
 		if (anisotropy) PrintError("Currently '-anisotr' and '-rect_dip' can not be used together");
 		if (sh_granul) PrintError("Currently '-granul' and '-rect_dip' can not be used together");
-		if (ScatRelation==SQ_SO) PrintError("'-rect_dip' is incompatible with '-scat so'");
 		if (IntRelation!=G_POINT_DIP && IntRelation!=G_IGT) PrintError("The specified interaction formulation is "
 			"designed only for cubical dipoles. Currently, only 'poi' and 'igt' can be used with rectangular dipoles");
 	}	
@@ -2174,6 +2147,16 @@ void VariablesInterconnect(void)
 			"Sommerfeld integrals (default for the surface mode) requires dipoles to have the same dimensions along "
 			"the x- and y-axes (but not z)");
 	}
+	if (cimag(mhost)!=0) { // currently a lot of limitations for the absorbing medium
+			//if (beamtype!=B_PLANE) PrintError("Non-zero imaginary part of medium refractive index (mhost)"
+			//	" can be used only with plane incident wave");
+			if (rectDip) PrintError("Currently non-zero imaginary part of medium refractive index (mhost)"
+				" is incompatible with rect_dip option");
+			if (surface) PrintError("Currently non-zero imaginary part of medium refractive index (mhost)"
+				" is incompatible with surface");
+			if (IntRelation!=G_POINT_DIP) PrintError("Currently non-zero imaginary part of medium refractive index (mhost)"
+					" is only compatible with the default interaction formulation");
+		}
 	InteractionRealArgs=(beamtype==B_DIPOLE); // other cases may be added here in the future (e.g. nearfields)
 #ifdef SPARSE
 	if (shape==SH_SPHERE) PrintError("Sparse mode requires shape to be read from file (-shape read ...)");
@@ -2327,7 +2310,7 @@ void DirectoryLog(const int argc,char **argv)
 	// make new directory and print info
 	if (IFROOT) {
 		MkDirErr(directory,ONE_POS);
-		PRINTFB("all data is saved in '%s'\n",directory);
+		printf("all data is saved in '%s'\n",directory);
 	}
 	// make logname; do it for all processors to enable additional logging in LogError
 	if (IFROOT) SnprintfErr(ONE_POS,logfname,MAX_FNAME,"%s/"F_LOG,directory);
@@ -2377,19 +2360,23 @@ void PrintInfo(void)
 
 	if (IFROOT) {
 		// print basic parameters
-		PRINTFB("box dimensions: %ix%ix%i\n",boxX,boxY,boxZ);
-		PRINTFB("lambda: "GFORM"   Dipoles/lambda: "GFORMDEF"\n",lambda,dpl);
-		PRINTFB("Required relative residual norm: "GFORMDEF"\n",iter_eps);
-		PRINTFB("Total number of occupied dipoles: %zu\n",nvoid_Ndip);
+		printf("box dimensions: %ix%ix%i\n",boxX,boxY,boxZ);
+		printf("lambda: "GFORM"   Dipoles/lambda: "GFORMDEF"%s\n",lambda,dpl,rectDip ? " (along the x-axis)" : "");
+		printf("medium refractive index: "CFORM"\n",REIM(mhost));
+		printf("Required relative residual norm: "GFORMDEF"\n",iter_eps);
+		printf("Total number of occupied dipoles: %zu\n",nvoid_Ndip);
 		// log basic parameters
-		fprintf(logfile,"lambda: "GFORM"\n",lambda);
+		fprintf(logfile,"lambda: "GFORM" (relative: "GFORM")\n",lambda,rel_lambda);
+		fprintf(logfile,"medium refractive index: "CFORM"\n",REIM(mhost));
 		fprintf(logfile,"shape: ");
-		fprintf(logfile,"%s "GFORM"%s\n",sh_form_str1,sizeX,sh_form_str2);
+		fprintf(logfile,"%s"GFORM"%s\n",sh_form_str1,sizeX,sh_form_str2);
 #ifndef SPARSE
 		if (sh_granul) fprintf(logfile,"  domain %d is filled with %d granules of diameter "GFORMDEF"\n"
 			"    volume fraction: specified - "GFORMDEF", actual - "GFORMDEF"\n",gr_mat+1,gr_N,gr_d,gr_vf,gr_vf_real);
 #endif // SPARSE
 		fprintf(logfile,"box dimensions: %ix%ix%i\n",boxX,boxY,boxZ);
+		if(rectDip) PrintBoth(logfile,"Using rectangular dipoles with proportions %g:%g:%g (x:y:z)\n",
+			rectScaleX,rectScaleY,rectScaleZ);
 		if (anisotropy) {
 			fprintf(logfile,"refractive index (diagonal elements of the tensor):\n");
 			if (Nmat==1) fprintf(logfile,"    "CFORM3V"\n",REIM3V(ref_index));
@@ -2402,11 +2389,11 @@ void PrintInfo(void)
 		}
 		else {
 			fprintf(logfile,"refractive index: ");
-			if (Nmat==1) fprintf(logfile,CFORM"\n",REIM(ref_index[0]));
+			if (Nmat==1) fprintf(logfile,CFORM" (relative: "CFORM")\n",REIM(abs_ref_index[0]),REIM(ref_index[0]));
 			else {
-				fprintf(logfile,"1. "CFORM"\n",REIM(ref_index[0]));
+				fprintf(logfile,"1. "CFORM" (relative: "CFORM")\n",REIM(abs_ref_index[0]), REIM(ref_index[0]));
 				for (i=1;i<Nmat;i++) {
-					if (i<Nmat_given) fprintf(logfile,"                  %d. "CFORM"\n",i+1,REIM(ref_index[i]));
+					if (i<Nmat_given) fprintf(logfile,"                  %d. "CFORM" (relative: "CFORM")\n",i+1,REIM(abs_ref_index[i]),REIM(ref_index[i]));
 					else fprintf(logfile,"                  %d. not specified\n",i+1);
 				}
 			}
@@ -2416,10 +2403,7 @@ void PrintInfo(void)
 			else fprintf(logfile,"Particle is placed near the substrate with refractive index "CFORM"\n",REIM(msub));
 			fprintf(logfile,"  height of the particle center: "GFORMDEF"\n",hsub);
 		}
-		if (rectDip) fprintf(logfile,"Dipole size: "GFORMDEF"x"GFORMDEF"x"GFORMDEF" (relative ratios "GFORMDEF":"
-			GFORMDEF":"GFORMDEF")\n",dsX,dsY,dsZ,rectScaleX,rectScaleY,rectScaleZ);
-		else fprintf(logfile,"Dipole size: "GFORMDEF" (cubical)\n",dsX);
-		fprintf(logfile,"Dipoles/lambda: "GFORMDEF"\n",dpl);
+		fprintf(logfile,"Dipoles/lambda: "GFORMDEF"%s\n",dpl,rectDip ? " (along the x-axis)" : "");
 		if (volcor_used) fprintf(logfile,"\t(Volume correction used)\n");
 		fprintf(logfile,"Required relative residual norm: "GFORMDEF"\n",iter_eps);
 		fprintf(logfile,"Total number of occupied dipoles: %zu\n",nvoid_Ndip);
@@ -2518,7 +2502,8 @@ void PrintInfo(void)
 			case G_IGT:
 				fprintf(logfile,"'Integrated Green's tensor' (accuracy "GFORMDEF", ",igt_eps);
 				if (igt_lim==UNDEF) fprintf(logfile,"no distance limit)\n");
-				else fprintf(logfile,"for distance < "GFORMDEF" dipole sizes)\n",igt_lim);
+				else fprintf(logfile,"for distance < "GFORMDEF" dipole sizes%s)\n",igt_lim,
+					rectDip ? " along the greatest dimension" : "");
 				break;
 			case G_IGT_SO: fprintf(logfile,"'Integrated Green's tensor [approximation O(kd^2)]'\n"); break;
 			case G_NLOC: fprintf(logfile,"'Non-local' (point-value, Gaussian width Rp="GFORMDEF")\n",nloc_Rp); break;
@@ -2553,8 +2538,8 @@ void PrintInfo(void)
 #endif
 #if defined(OPENCL) && !defined(SPARSE)
 		fprintf(logfile,"OpenCL FFT algorithm: ");
-#	ifdef CLFFT
-		fprintf(logfile,"clFFT\n");
+#	ifdef CLFFT_AMD
+		fprintf(logfile,"by AMD\n");
 #	elif defined(CLFFT_APPLE)
 		fprintf(logfile,"by Apple\n");
 #	endif

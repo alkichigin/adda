@@ -1,9 +1,11 @@
-/* All the global variables are declared here
+/* File: vars.h
+ * $Date::                            $
+ * Descr: all the global variables are declared here
  *
- * 'Global' means used in three or more source files. Variables that are used in only two source files are called
- * 'semi-global' and not listed here. They are defined in one file and referenced with 'extern' in another one.
+ *        'Global' means used in three or more source files. Variables that are used in only two source files are called
+ *        'semi-global' and not listed here. They are defined in one file and referenced with 'extern' in another one.
  *
- * Copyright (C) ADDA contributors
+ * Copyright (C) 2006-2014 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
@@ -30,7 +32,10 @@
 // basic variables
 extern int boxX,boxY,boxZ;
 extern size_t boxXY;
-extern double gridspace,dsX,dsY,dsZ,rectScaleX,rectScaleY,rectScaleZ,dipvol,kd,kdX,kdY,kdZ,ka_eq,inv_G,WaveNum;
+extern double gridspace,gridSpaceX,gridSpaceY,gridSpaceZ,rectScaleX,rectScaleY,rectScaleZ,maxRectScale,dipvol,
+	ka_eq,inv_G;
+extern doublecomplex kd,WaveNum;
+extern doublecomplex mhost;
 extern double * restrict DipoleCoord;
 
 extern double memory,memPeak;
@@ -64,7 +69,7 @@ extern unsigned char * restrict material;
 // iterative solver
 extern enum iter IterMethod;
 extern int maxiter;
-extern doublecomplex *xvec,*pvec,* restrict Einc;
+extern doublecomplex *xvec,*pvec,* restrict Einc,* restrict E1;
 
 // scattering at different angles
 extern int nTheta;
@@ -89,6 +94,9 @@ extern double inc_scale,hsub,prIncRefl[3],prIncTran[3];
 #ifndef SPARSE // These variables are exclusive to the FFT mode
 
 extern unsigned short * restrict position;
+
+extern doublecomplex * restrict Xmatrix;
+
 // auxiliary grids and their partition over processors
 extern size_t gridX,gridY,gridZ;
 extern size_t gridYZ;

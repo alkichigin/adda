@@ -1,7 +1,11 @@
-/* The module to calculate the E field and all scattering quantities.
- * Routines for most scattering quantities are in crosssec.c. Also saves internal fields to file (optional).
+ /* File: CalculateE.c
+ * $Date::                            $
+ * Descr: the module to calculate the E field and all scattering quantities
  *
- * Copyright (C) ADDA contributors
+ *        Routines for most scattering quantities are in crosssec.c. Also saves internal fields to
+ *        file (optional).
+ *
+ * Copyright (C) 2006-2014 ADDA contributors
  * This file is part of ADDA.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
@@ -672,7 +676,7 @@ static void StoreFields(const enum incpol which,doublecomplex * restrict cmplxF,
 	Synchronize();
 	if (IFROOT) CatNFiles(directory,tmpl,fname_sh);
 #endif
-	if (IFROOT) PRINTFB("%s saved to file\n",fullname);
+	if (IFROOT) printf("%s saved to file\n",fullname);
 	Timing_FileIO += GET_TIME() - tstart;
 }
 
@@ -698,7 +702,7 @@ static void CalcIntegralScatQuantities(const enum incpol which)
 {
 	// Scattering force, extinction force and radiation pressure per dipole
 	double * restrict Frp;
-	double Cext,Cabs,Csca,Cdec, // Cross sections
+	double Cext,Cabs,Csca,Cenh, // Cross sections
 	dummy[3],                // asymmetry parameter*Csca
 	Finc_tot[3],Fsca_tot[3],Frp_tot[3], // total extinction and scattering forces, and their sum (radiation pressure)
 	Cnorm,            // normalizing factor from force to cross section
@@ -710,7 +714,7 @@ static void CalcIntegralScatQuantities(const enum incpol which)
 	const char *f_suf;
 
 	// redundant initialization to remove warnings
-	Cext=Cabs=Csca=Cdec=0;
+	Cext=Cabs=Csca=Cenh=0;
 	CCfile=NULL;
 
 	D("Calculation of cross sections started");
@@ -747,7 +751,7 @@ static void CalcIntegralScatQuantities(const enum incpol which)
 		}
 	}
 	else { // not orient_avg
-		if (beamtype==B_DIPOLE) Cdec=DecayCross(); // this is here to be run by all processors
+		if (beamtype==B_DIPOLE || beamtype==B_ELECTRON) Cenh=EnhCross(); // this is here to be run by all processors
 		if (IFROOT) {
 			SnprintfErr(ONE_POS,fname_cs,MAX_FNAME,"%s/"F_CS"%s",directory,f_suf);
 			CCfile=FOpenErr(fname_cs,"w",ONE_POS);
@@ -756,9 +760,9 @@ static void CalcIntegralScatQuantities(const enum incpol which)
 			if (beamtype==B_DIPOLE) {
 				double self=1;
 				if (surface) self+=C0dipole_refl/C0dipole;
-				double tot=self+Cdec/C0dipole;
+				double tot=self+Cenh/C0dipole;
 				fprintf(CCfile,"\nDecay-rate enhancement\n\n");
-				PRINTFB("\nDecay-rate enhancement:\n");
+				printf("\nDecay-rate enhancement:\n");
 				PrintBoth(CCfile,"Total\t= "GFORM"\n",tot);
 				if (calc_Cabs) { // for simplicity we keep a single condition here
 					double nonrad=Cabs/C0dipole;
@@ -768,6 +772,22 @@ static void CalcIntegralScatQuantities(const enum incpol which)
 					PrintBoth(CCfile,"Nonrad\t= "GFORM"\n",nonrad);
 				}
 				if (surface) PrintBoth(CCfile,"Surface\t= "GFORM"\n",self);
+			}
+			if (beamtype==B_ELECTRON) {
+				double Peels, Pcl, Crad;
+				double hbar = 1.054571817e-27;
+				double hbar_ev = 6.582119569e-16;
+				Crad = Cenh - Cabs;
+				PrintBoth(CCfile,"Cenh\t= "EFORM"\n",Cenh);
+				PrintBoth(CCfile,"Crad\t= "EFORM"\n",Crad);
+				fprintf(CCfile,"\nEELS and Cathodoluminescence\n\n");
+				printf("\nEELS and Cathodoluminescence:\n");
+				Peels = Cenh/((FOUR_PI*WaveNum)*PI*hbar*hbar_ev);
+				Peels *= 1e-21; //(nm)^3 -> (cm)^3
+				Pcl = Crad/((FOUR_PI*WaveNum)*PI*hbar*hbar_ev);
+				Pcl *= 1e-21; //(nm)^3 -> (cm)^3
+				PrintBoth(CCfile,"Peels\t= "EFORM"\n",Peels);
+				PrintBoth(CCfile,"Pcl\t= "EFORM"\n",Pcl);
 			}
 			if (all_dir) fprintf(CCfile,"\nIntegration\n\n");
 			if (calc_Csca) {
@@ -783,7 +803,7 @@ static void CalcIntegralScatQuantities(const enum incpol which)
 			}
 		} // end of root
 		if (calc_mat_force) {
-			if (IFROOT) PRINTFB("Calculating the force per dipole\n");
+			if (IFROOT) printf("Calculating the force per dipole\n");
 			if (store_force) MALLOC_VECTOR(Frp,double,local_nRows,ALL);
 			else Frp=NULL;
 			Frp_mat(Finc_tot,Fsca_tot,Frp);
