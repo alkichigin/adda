@@ -35,6 +35,8 @@
 #define REIM(a) creal(a),cimag(a)
 #define REIM3V(a) REIM((a)[0]),REIM((a)[1]),REIM((a)[2])
 
+extern void cik01_(doublecomplex *z, doublecomplex *cbi0, doublecomplex *cdi0, doublecomplex *cbi1, doublecomplex *cdi1, doublecomplex *cbk0, doublecomplex *cdk0, doublecomplex *cbk1, doublecomplex *cdk1);
+
 #ifndef NO_IMEXP_TABLE
 void imExpTableInit(void);
 doublecomplex imExpTable(double arg);
@@ -67,7 +69,7 @@ static inline doublecomplex cSqrtCut(const doublecomplex a)
  * surface. So the field above the surface actually comes from distant points on the surface, which has much larger
  * amplitude of the incident wave from below (compared to that under the observation point). Since the distance along
  * the surface (or the corresponding slope) is inversely proportional to the imaginary part of the substrate refractive
- * index, the effect remains finite even in the limit of absorption going to zero. Therefore, in this case there exist
+ * index, the effect remains finite even in the limit of absorption going to zero. Therefore, in this case there exists
  * a discontinuity when switching from non-absorbing to absorbing substrate. Physically, this fact is a consequence of
  * the infinite lateral extent of the plane wave.
  *
@@ -126,6 +128,123 @@ static inline doublecomplex imExpM1(const double arg)
 		return -2*t/(I+t); // Alternatively, (I-t)*2t/(1+t^2), but we leave the optimization to compiler
 	}
 	else return imExp(arg)-1;
+}
+
+//======================================================================================================================
+
+static inline int sgn(double v){
+  return (v > 0) - (v < 0);
+}
+
+/*
+static inline doublecomplex cсSinh(doublecomplex arg){
+	return (cexp(arg)-cexp(-arg))/2;
+}
+
+static inline doublecomplex cсCosh(doublecomplex arg){
+	return (cexp(arg)+cexp(-arg))/2;
+}
+
+static inline doublecomplex cсCoth(doublecomplex arg){
+	return (cexp(arg)+cexp(-arg))/(cexp(arg)-cexp(-arg));
+}
+*/
+
+static inline doublecomplex ArcCoth(const doublecomplex arg){
+	return .5*clog((arg+1)/(arg-1));
+}
+
+static inline doublecomplex incJintegval(const doublecomplex w, const int nun2m){
+  if(nun2m == 0){
+	  return w;
+  }
+  else{
+	  return csinh(nun2m*w)/nun2m;
+  }
+}
+
+static inline double fac(int n)
+{
+	unsigned int i;
+	double result = 1;
+	for(i = 2; i<=n; i++){
+		result *= i;
+		//printf("%u %lf\n", i, result);
+	}
+	return result;
+}
+
+static inline doublecomplex incJs(const int nu, const doublecomplex arg, const doublecomplex omega, const double tol)
+/* incomplete Bessel function J of complex argument incJ(order, arg, omega, tolerance) through series calculation for small arguments
+ */
+{
+	doublecomplex Sn, Sm;
+	doublecomplex incn0,incn,incm;
+	int n,m;
+	double fc;
+	Sn = 0;
+	incn0 = incJintegval(omega, nu);
+	incn = incn0;
+	n = 0;
+	//printf("---Calculating incJ0\n");
+	//printf("tol %e\n",tol);
+	//printf("abs(creal(incn0))*tol %e\n",fabs(creal(incn0))*tol);
+	//printf("abs(cimag(incn0))*tol %e\n",fabs(cimag(incn0))*tol);
+	//printf("incn0\t=\t"CFORM"\n",REIM(incn0));
+	while(fabs(creal(incn)) >= fabs(creal(incn0))*tol || fabs(cimag(incn)) >= fabs(cimag(incn0))*tol){
+		Sm = 0;
+
+		for(m = 0; m <= n; m++){
+			//fc = 1/(fac(m)*fac(n - m));
+			incm = incJintegval(omega, (nu + n - 2*m))/(fac(m)*fac(n - m));
+			//printf("%i %i integval "CFORM" fc=%e incm "CFORM"\n",n,m,REIM(incJintegval(omega, (nu + n - 2*m))),fc,REIM(incm));
+			Sm += incm;
+		}
+		incn = cpow((-arg/2), n)*Sm;
+		Sn += incn;
+		//printf("n %i, incn = "CFORM", Sm = "CFORM"\n",n,REIM(incn),REIM(Sm));
+
+		n++;
+		//if(n>=15) return Sn;
+	}
+	return Sn;
+}
+
+static inline doublecomplex incKpos(const int nu, const doublecomplex arg, const doublecomplex Omega)
+{
+	doublecomplex b0 = ccosh(nu*Omega)/csinh(Omega);
+	doublecomplex b1 = (nu*csinh(nu*Omega) - ccosh(nu*Omega)*(ccosh(Omega)/csinh(Omega)))/(csinh(Omega)*csinh(Omega));
+	doublecomplex b2 = (nu*nu*ccosh(nu*Omega) - 3*nu*csinh(nu*Omega)*(ccosh(Omega)/csinh(Omega)) + (2 + 3/(csinh(Omega)*csinh(Omega)))*ccosh(nu*Omega))/(2*csinh(Omega)*csinh(Omega)*csinh(Omega));
+
+	return cexp(-arg*ccosh(Omega))*((1*b0/arg) + (1*b1/(arg*arg)) + (2*b2/(arg*arg*arg)));
+}
+
+static inline doublecomplex incJl(const int nu, const doublecomplex arg, const doublecomplex Omega)
+{
+	doublecomplex t1,t2,t3,t4,t5,t6,K0,K1;
+	cik01_(&arg, &t1, &t2, &t3, &t4, &K0, &t5, &K1, &t6);
+	if(nu == 0){
+		return sgn(creal(Omega))*K0 - incKpos(nu,arg,Omega);
+	}
+	else if(nu == 1){
+		return sgn(creal(Omega))*K1 - incKpos(nu,arg,Omega);
+	}
+	return 0;
+}
+
+static inline doublecomplex incJ(const int nu, const doublecomplex arg, const doublecomplex Omega, const double tol)
+/* incomplete Bessel function J of complex argument incJ(order, arg, omega, tolerance)
+ */
+{
+	//return incJs(nu,arg,Omega,tol);
+	if(cabs(arg) < 20){
+		//print("KAWABUNGA!!");
+		return incJs(nu,arg,Omega,tol);
+	}
+	else
+	{
+		return incJl(nu,arg,Omega);
+	}
 }
 
 //======================================================================================================================

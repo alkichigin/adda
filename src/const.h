@@ -100,6 +100,7 @@ the compilation may fail or produce wrong results. If you still want to try, ena
 #define EULER               0.57721566490153286060651209008241
 #define FULL_ANGLE          360.0
 #define MICRO               1E-6
+#define DBL_EPSILON 2.2204460492503131e-16
 
 // sets the maximum box size; otherwise 'position' should be changed
 #define BOX_MAX USHRT_MAX

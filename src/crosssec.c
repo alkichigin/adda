@@ -840,7 +840,7 @@ double ExtCross(const double * restrict incPol)
 	 * beam satisfies this condition or add another case here with different formulae.
 	*/
 	if (surface) sum*=inc_scale;
-	return FOUR_PI*WaveNum0*sum/creal(mhost);;
+	return FOUR_PI*WaveNum0*sum/creal(mhost);
 }
 
 //======================================================================================================================
@@ -898,6 +898,7 @@ double AbsCross(void)
 	}
 	MyInnerProduct(&sum,double_type,1,&Timing_ScatQuanComm);
 	if (surface) sum*=inc_scale;
+
 	return FOUR_PI*WaveNum0*sum/creal(mhost);
 }
 
@@ -926,7 +927,6 @@ double EnhCross(void)
 		for (i=0;i<local_nvoid_Ndip;++i) sum+=cimag(epshost*cDotProd_conj(E1+3*i,pvec+3*i)); // sum{Im(E_1.P)}
 		MyInnerProduct(&sum,double_type,1,&Timing_ScatQuanComm);
 	}
-
 	//return FOUR_PI*sum/creal(WaveNum);
 	return -FOUR_PI*WaveNum0*sum/creal(mhost);
 }

@@ -1,4 +1,4 @@
-import sys, os, multiprocessing
+import sys, os, multiprocessing, numpy as np
 if sys.path[1] != os.path.abspath(__file__ + "/../../../../misc/ADDAwrapper") : sys.path.insert(1,os.path.abspath(__file__ + "/../../../../misc/ADDAwrapper")) #This is to import ADDA wrapper from parent directory
 import ADDAwrapper as aw
 
@@ -8,8 +8,8 @@ aw_parameters = dict(
     adda_exec = aw.addaexec_find(mode="seq"), #path to ADDA executable
     parallel_procs = multiprocessing.cpu_count()-1, #number of parallel processes is equal to the number of processor cores minus 1
 
-    mp_file = os.path.abspath(__file__ + "/../../../../misc/ADDAwrapper/refractive_index/" + "Ag_JHW.csv"), #file with refractive index of the particle, each string contains: ev,mp_re,mp_im
-    ev_range = (2.5,4.5), #[eV]. Used in "spectrum_" functions. (ev_min,ev_max): range from ev_min[eV] to ev_max[eV]
+    mp_files = [os.path.abspath(__file__ + "/../../../../misc/ADDAwrapper/refractive_index/" + "Ag_JHW.csv")], #file with refractive index of the particle, each string contains: ev,mp_re,mp_im
+    ev_range = np.arange(2.5,4.5+.01,0.05), #[eV]. Used in "spectrum_" functions. (ev_min,ev_max,step): range from ev_min[eV] to ev_max[eV]
     ev = 3.45, #[eV]. Used in "scan_" and "extrapolation_" functions.
     
     spectrumline_startpoint = (0,50), # (x,y) [nm]
@@ -30,7 +30,7 @@ adda_cmdlineargs = dict(
     # Particle
     shape = "sphere",
     size = 40, #[nm]
-    grid = 32, #dipoles per x-axis size of the particle
+    grid = 128, #dipoles per x-axis size of the particle
     mhost = "1 0", #refractive index of the host medium
     
     # Beam
@@ -55,37 +55,45 @@ adda_cmdlineargs = dict(
 ### Executing commands
 if __name__ == '__main__': 
     
-    # Execute spectrum
-    dirname = os.path.abspath(__file__ + "/../" + "spectrum")
-    aw.spectrum_execute(aw_parameters,adda_cmdlineargs,dirname)
-    # Collect and plot EELS probabilities
-    aw.spectrum_collect("Peels",dirname)
-    aw.spectrum_plot("Peels",dirname)
-    # Collect and plot CL probabilities
-    aw.spectrum_collect("Pcl",dirname)
-    aw.spectrum_plot("Pcl",dirname)
+    aw_parameters["dirname"] = os.path.abspath(__file__ + "/../")
+    os.makedirs("geom",exist_ok=True)
+    aw.geom_gen(aw_parameters,adda_cmdlineargs)
+    fig1,ax1 = aw.geometry(f"geom/{adda_cmdlineargs['shape']}.geom")
+    ax1.view_init(30,-50)
+    ax1.axis('off')
+    fig1.savefig(f"{adda_cmdlineargs['shape']}.pdf", bbox_inches='tight', dpi=600)
+    
+    # # Execute spectrum
+    # aw_parameters["dirname"] = os.path.abspath(__file__ + "/../" + "spectrum")
+    # aw.spectrum_execute(aw_parameters,adda_cmdlineargs)
+    # # Collect and plot EELS probabilities
+    # aw.spectrum_collect("Peels",aw_parameters)
+    # aw.spectrum_plot("Peels",aw_parameters)
+    # # Collect and plot CL probabilities
+    # aw.spectrum_collect("Pcl",aw_parameters)
+    # aw.spectrum_plot("Pcl",aw_parameters)
 
-    # Execute extrapolation for single energy ev
-    dirname = os.path.abspath(__file__ + "/../" + "extrapolation")
-    aw.extrapolation_execute(aw_parameters,adda_cmdlineargs,dirname)
-    # Collect and plot EELS probabilities for different y~1/grid with extrapolated value in y=0 (with errorbar)
-    aw.extrapolation_collect("Peels",dirname)
-    aw.extrapolation_plot("Peels",dirname)
+    # # Execute extrapolation for single energy ev
+    # dirname = os.path.abspath(__file__ + "/../" + "extrapolation")
+    # aw.extrapolation_execute(aw_parameters,adda_cmdlineargs,dirname)
+    # # Collect and plot EELS probabilities for different y~1/grid with extrapolated value in y=0 (with errorbar)
+    # aw.extrapolation_collect("Peels",dirname)
+    # aw.extrapolation_plot("Peels",dirname)
     
-    # Execute spectrum with extrapolation at each energy ev
-    dirname = os.path.abspath(__file__ + "/../" + "spectrum_with_extrapolation")
-    aw.spectrum_with_extrapolation_execute(aw_parameters,adda_cmdlineargs,dirname)
-    # Collect and plot fit EELS probabilities spectrum (with errorbar)
-    aw.spectrum_with_extrapolation_collect("Peels",dirname)
-    aw.spectrum_with_extrapolation_plot("Peels",dirname)
+    # # Execute spectrum with extrapolation at each energy ev
+    # dirname = os.path.abspath(__file__ + "/../" + "spectrum_with_extrapolation")
+    # aw.spectrum_with_extrapolation_execute(aw_parameters,adda_cmdlineargs,dirname)
+    # # Collect and plot fit EELS probabilities spectrum (with errorbar)
+    # aw.spectrum_with_extrapolation_collect("Peels",dirname)
+    # aw.spectrum_with_extrapolation_plot("Peels",dirname)
     
-    # Execute scan of particle's cross-section for single energy ev
-    dirname = dirname = os.path.abspath(__file__ + "/../" + "scan")
-    aw.scan_execute(aw_parameters,adda_cmdlineargs,dirname)
-    # Collect and map scanned EELS probabilities on particle's cross-section
-    aw.scan_collect("Peels",dirname)
-    aw.scan_plot("Peels",dirname)
-    aw.scan_collect("Pcl",dirname)
-    aw.scan_plot("Pcl",dirname)
+    # # Execute scan of particle's cross-section for single energy ev
+    # dirname = dirname = os.path.abspath(__file__ + "/../" + "scan")
+    # aw.scan_execute(aw_parameters,adda_cmdlineargs,dirname)
+    # # Collect and map scanned EELS probabilities on particle's cross-section
+    # aw.scan_collect("Peels",dirname)
+    # aw.scan_plot("Peels",dirname)
+    # aw.scan_collect("Pcl",dirname)
+    # aw.scan_plot("Pcl",dirname)
 
 

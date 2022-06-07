@@ -1,0 +1,17 @@
+Cext	= 4.769846277e-25
+Qext	= 1.205632056e-28
+Cabs	= 4.675059167e-25
+Qabs	= 1.181673553e-28
+Cenh	= 5.041257382e-25
+Qenh	= 1.274234252e-28
+
+Integration
+
+Csca	= 1.260972967e-27
+Qsca	= 3.187250371e-31
+
+EELS and Cathodoluminescence
+
+Peels	= 1.5447414997E-03
+Pext	= 1.4615757406E-03
+Pcl	= 8.7029631029E-05

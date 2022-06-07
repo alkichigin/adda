@@ -63,10 +63,12 @@ static double scale_x,scale_z; // multipliers for scaling coordinates
 static doublecomplex ki,kt;    // abs of normal components of k_inc/k0, and ktran/k0
 static doublecomplex ktVec[3]; // k_tran/k0
 static double p0;              // amplitude of the incident dipole moment
-static doublecomplex gamma_eps_inv;// 1/gamma_eps
+static doublecomplex beta_eps, gamma_eps_inv;// v*m_host/c, 1/gamma_eps
 static doublecomplex e_pref; // prefactor of the field of the electron
 static double e_w_v;   // prefactor in an argument of a phase exponent in the incident field of the electron
-static doublecomplex e_w_gv;  // prefactor in an argument of the Bessel_K in the incident field of the electron
+static doublecomplex e_w_gv;  // prefactor in an argument of the BesselK, incBesselJ in the incident field of the electron
+static doublecomplex eps1, eps2; //dielectric permittivity of the media above and below the plane surface
+static doublecomplex vgw, vgw2; //Some constants for the field of an electron
 #ifndef NO_FORTRAN
 static int besN;                  // Bessel beam order
 static double besAlpha;           // half-cone angle (in radians)
@@ -93,14 +95,11 @@ void InitBeam(void)
 	double w0; // beam width
 	//CASE: B_ELECTRON
 	static double e_energy;        // kinetic energy of the electron
-	static doublecomplex beta_eps;// v*m_host/c
 	static double e_v;      // speed of the electron
 	double q_electron = -4.803204673e-10; //electric charge of an electron, cm^(3/2)*g^(1/2)*s^(-1)
 	double c_light = 29979245800; //speed of light in vacuum, cm/s
 	const double e_energy_rest = 510.99895; //Electron rest mass, keV
 	const char *tmp_str; // temporary string
-	//q_electron *= sqrt(10)*1e10; //scale cm->nm
-	//c_light *= 1e7; //scale cm->nm
 	/* TO ADD NEW BEAM
 	 * Add here all intermediate variables, which are used only inside this function.
 	 */
@@ -203,7 +202,7 @@ void InitBeam(void)
 			return;
 		case B_ELECTRON:
 			//Electron field is in CGS. Electron field in SI would look the same, except multiplied by 1/(4*pi*eps0)
-			if (surface) PrintError("Currently, electron incident beam is not supported for '-surf'");
+			//if (surface) PrintError("Currently, electron incident beam is not supported for '-surf'");
 			// initialize parameters
 			e_energy=beam_pars[0];
 			TestPositive(e_energy,"kinetic energy of the electron");
@@ -214,15 +213,28 @@ void InitBeam(void)
 			beta_eps = e_v*mhost/c_light;
 			gamma_eps_inv = cSqrtCut(1-beta_eps*beta_eps);
 			//printf("gamma_eps_inv\t=\t"CFORM"\n",REIM(gamma_eps_inv));
-			//printf("omega = "EFORM"\n",WaveNum*c_light/scale_z);
+			//printf("w = "EFORM"\n",WaveNum0*c_light);
 			//printf("v = "EFORM"\n",e_v);
 			e_w_v = WaveNum0*c_light/e_v;
 			//printf("e_w_v\t=\t"CFORM"\n",REIM(e_w_v));
 			e_w_gv = e_w_v*gamma_eps_inv;
 			//printf("e_w_gv\t=\t"CFORM"\n",REIM(e_w_gv));
-			e_pref = 2*q_electron*(WaveNum0*1e7)*gamma_eps_inv/(beta_eps*beta_eps*c_light); // (q*k0/c) must be in statV/cm => multiplying k0*1e7
+			e_pref = q_electron*(WaveNum0*1e7)*gamma_eps_inv/(beta_eps*beta_eps*c_light); // (q*k0/c) must be in statV/cm => multiplying k0*1e7
 			//printf("e_pref = "CFORM"\n",REIM(e_pref));
+			if(surface){
+				if(mhost != 1) PrintError("Currently, '-mhost' is not supported for '-surf'");
+				inc_scale=1;
+				vgw = e_v/(gamma_eps_inv*WaveNum0*c_light);
+				vgw2 = vgw*vgw;
+				//printf("vgw\t=\t"CFORM"\n",REIM(vgw));
+				//printf("vgw2\t=\t"CFORM"\n",REIM(vgw2));
+				eps1 = mhost*mhost;
+				eps2 = msub*msub;
+				//printf("msub\t=\t"CFORM"\n",REIM(msub));
+			}
 			if (IFROOT) beam_descr=dyn_sprintf("The electron with the %g keV energy moving through "GFORM3V,e_energy,COMP3V(beam_center_0));
+
+
 			return;
 #ifndef NO_FORTRAN
 		case B_BES_CS:
@@ -351,8 +363,10 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 	doublecomplex psi0,Q,Q2;
 	doublecomplex v1[3],v2[3],v3[3],gt[6];
 	double ro,ro2,ro4;
-	double x,y,z,x2_s,xy_s,temp;
+	double x,y,z,z0,R1,scale,x2_s,xy_s,temp;
+	double tol; //incJ calculation tolerance
 	doublecomplex t1,t2,t3,t4,t5,t6,t7,t8,ctemp,e_wb_gv;
+	doublecomplex epp,epm,emp,emm,K0,K1,incJ0p,incJ0m,incJ1p,incJ1m,omp,omm,hzp,hzm,hzzp,hzzm,hzxp,hzxm;
 	const double *ex; // coordinate axis of the beam reference frame
 	double ey[3];
 	double r1[3],r1par[3],r1per[3];
@@ -586,40 +600,145 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 				// set relative coordinates (in beam's coordinate system)
 				LinComb(DipoleCoord+j,beam_center,1,-1,r1);
 
-				temp = DotProd(r1,prop);
-				vMultScal(temp,prop,r1par);
-				vSubtr(r1,r1par,r1per);
-				ro = vNorm(r1per);
-				z = temp;
-				if(ro != 0) vNormalize(r1per);
-				else LogError(ONE_POS,"electron hit a dipole, this is currently not supported, ro = "EFORM, ro);
+				if(surface){
+					//printf("--- j = %i\n",j);
+					//printf("prop\t=\t%g %g %g\n",prop[0],prop[1],prop[2]);
+					if(prop[0] != 0 || prop[1] != 0 || prop[2] != -1) PrintError("Currently, only '-prop 0 0 -1' is supported for '-surf'");
+					ro = sqrt(r1[0]*r1[0]+r1[1]*r1[1]);
+					z = (DipoleCoord+j)[2] + hsub;
+					//printf("b = %lf\n",ro);
+					//printf("z = %lf\n",z);
+					if(ro == 0) LogError(ONE_POS,"electron hit a dipole, this is currently not supported, ro = "EFORM, ro);
+					z0 = beam_center[2];
+					e_wb_gv = e_w_gv*ro;
+					cik01_(&e_wb_gv, &t1, &t2, &t3, &t4, &K0, &t5, &K1, &t6);
+					//printf("e_wb_gv\t=\t"CFORM"\n",REIM(e_wb_gv));
+					//printf("K0\t=\t"CFORM"\n",REIM(K0));
+					//printf("K1\t=\t"CFORM"\n",REIM(K1));
 
-				//printf("z = "EFORM"\n",z);
-				//printf("b = "EFORM"\n",ro);
-				//printf("g = "EFORM"\n",creal(1./gamma_eps_inv));
+					epp = imExp(e_w_v*(z+z0));
+					epm = imExp(e_w_v*(z-z0));
+					emp = imExp(-e_w_v*(z+z0));
+					emm = imExp(-e_w_v*(z-z0));
+					//printf("epp\t=\t"CFORM"\n",REIM(epp));
+					//printf("epm\t=\t"CFORM"\n",REIM(epm));
+					//printf("emp\t=\t"CFORM"\n",REIM(emp));
+					//printf("emm\t=\t"CFORM"\n",REIM(emm));
+					omp = asinh(z/ro)+ArcCoth(beta_eps);
+					omm = asinh(z/ro)-ArcCoth(beta_eps);
+					//printf("Omega+\t=\t"CFORM"\n",REIM(omp));
+					//printf("Omega-\t=\t"CFORM"\n",REIM(omm));
 
-				e_wb_gv = e_w_gv*ro;
-				cik01_(&e_wb_gv, &t1, &t2, &t3, &t4, &t7, &t5, &t8, &t6);
-				//printf("e_wb_gv\t=\t"CFORM"\n",REIM(e_wb_gv));
-				//printf("besselK0re\t=\t"EFORM"\n",creal(t7));
-				//printf("besselK0im\t=\t"EFORM"\n",cimag(t7));
-				//printf("besselK1re\t=\t"EFORM"\n",creal(t8));
-				//printf("besselK1im\t=\t"EFORM"\n",cimag(t8));
+					tol = 1e-8; //how many digits of precision we will have in incJ calculation
+					incJ0p = incJ(0,e_wb_gv,omp,tol);
+					//printf("incJ0+\t=\t"CFORM"\n",REIM(incJ0p));
+					incJ0m = incJ(0,e_wb_gv,omm,tol);
+					//printf("incJ0-\t=\t"CFORM"\n",REIM(incJ0m));
+					incJ1p = incJ(1,e_wb_gv,omp,tol);
+					//printf("incJ1+\t=\t"CFORM"\n",REIM(incJ1p));
+					incJ1m = incJ(1,e_wb_gv,omm,tol);
+					//printf("incJ1-\t=\t"CFORM"\n",REIM(incJ1m));
 
-				t4 = imExp(e_w_v*z);
-				//printf("imExp = "CFORM"\n",t4);
-				cvMultScal_RVec(t4*t8,r1per,v1);
-				cvMultScal_RVec((-I)*gamma_eps_inv*t4*t7,prop,v2);
-				cvAdd(v1,v2,v3);
-				cvMultScal_cmplx(e_pref,v3,b+j); //E_inc
-				//printf("Einc\t=\t"CFORM3V"\n",REIM3V(b+j));
+					R1 = (1/sqrt(ro*ro+z*z));
+					hzp = R1*cexp(-e_wb_gv*ccosh(omp));
+					hzm = R1*cexp(-e_wb_gv*ccosh(omm));
+					//printf("hz+\t=\t"CFORM"\n",REIM(hzp));
+					//printf("hz-\t=\t"CFORM"\n",REIM(hzm));
+					hzzp = -R1*hzp*(z*R1+e_wb_gv*csinh(omp));
+					hzzm = -R1*hzm*(z*R1+e_wb_gv*csinh(omm));
+					//printf("hzz+\t=\t"CFORM"\n",REIM(hzzp));
+					//printf("hzz-\t=\t"CFORM"\n",REIM(hzzm));
+					hzxp = hzp*((1./vgw)*(z*R1*csinh(omp)-ccosh(omp)) - ro*R1*R1);
+					hzxm = hzm*((1./vgw)*(z*R1*csinh(omm)-ccosh(omm)) - ro*R1*R1);
+					//printf("hzx+\t=\t"CFORM"\n",REIM(hzxp));
+					//printf("hzx-\t=\t"CFORM"\n",REIM(hzxm));
 
-				t4 = conj(t4);
-				cvMultScal_RVec(-t4*t8,r1per,v1);
-				cvMultScal_RVec((-I)*gamma_eps_inv*t4*t7,prop,v2);
-				cvAdd(v1,v2,v3);
-				cvMultScal_cmplx(e_pref,v3,E1+j); //E_1
-				//printf("E1\t=\t"CFORM3V"\n",REIM3V(E1+j));
+
+
+					//Einc: x,y,z
+					(b+j)[0] = -e_pref*(r1[0]/ro)*(1/(eps1+eps2))*(
+							K1*(emm*(3*eps1+eps2)+epp*(eps1-eps2))
+							- (eps1-eps2)*(
+									emm*(incJ1p + vgw*(z/ro)*hzp - I*(vgw/e_w_v)*hzxp) +
+									epp*(incJ1m + vgw*(z/ro)*hzm + I*(vgw/e_w_v)*hzxm)
+									));
+					//printf("EincX\t=\t"CFORM"\n",REIM((b+j)[0]));
+					(b+j)[1] = -e_pref*(r1[1]/ro)*(1/(eps1+eps2))*(
+							K1*(emm*(3*eps1+eps2)+epp*(eps1-eps2))
+							- (eps1-eps2)*(
+									emm*(incJ1p + vgw*(z/ro)*hzp - I*(vgw/e_w_v)*hzxp) +
+									epp*(incJ1m + vgw*(z/ro)*hzm + I*(vgw/e_w_v)*hzxm)
+									));
+					//printf("EincY\t=\t"CFORM"\n",REIM((b+j)[1]));
+					(b+j)[2] = (-I*gamma_eps_inv)*e_pref*(1/(eps1+eps2))*(
+							K0*(emm*(3*eps1+eps2)-epp*(eps1-eps2))
+							- (eps1-eps2)*(
+									emm*(incJ0p + vgw2*(2*I*e_w_v*hzp - hzzp)) -
+									epp*(incJ0m - vgw2*(2*I*e_w_v*hzm + hzzm))
+									));
+					//printf("EincZ\t=\t"CFORM"\n",REIM((b+j)[2]));
+
+					//E1: x,y,z
+					(E1+j)[0] = e_pref*(r1[0]/ro)*(1/(eps1+eps2))*(
+							K1*(epm*(3*eps1+eps2) + emp*(eps1-eps2))
+							- (eps1-eps2)*(
+									epm*(incJ1m + vgw*(z/ro)*hzm + I*(vgw/e_w_v)*hzxm) +
+									emp*(incJ1p + vgw*(z/ro)*hzp - I*(vgw/e_w_v)*hzxp)
+									));
+					//printf("E1X\t=\t"CFORM"\n",REIM((E1+j)[0]));
+					(E1+j)[1] = e_pref*(r1[1]/ro)*(1/(eps1+eps2))*(
+							K1*(epm*(3*eps1+eps2) + emp*(eps1-eps2))
+							- (eps1-eps2)*(
+									epm*(incJ1m + vgw*(z/ro)*hzm + I*(vgw/e_w_v)*hzxm) +
+									emp*(incJ1p + vgw*(z/ro)*hzp - I*(vgw/e_w_v)*hzxp)
+									));
+					//printf("E1Y\t=\t"CFORM"\n",REIM((E1+j)[1]));
+					(E1+j)[2] = (-I*gamma_eps_inv)*e_pref*(1/(eps1+eps2))*(
+							K0*(epm*(3*eps1+eps2) - emp*(eps1-eps2))
+							- (eps1-eps2)*(
+									epm*(incJ0m - vgw2*(2*I*e_w_v*hzm + hzzm)) -
+									emp*(incJ0p + vgw2*(2*I*e_w_v*hzp - hzzp))
+									));
+					//printf("E1Z\t=\t"CFORM"\n",REIM((E1+j)[2]));
+
+				}
+				else{
+					temp = DotProd(r1,prop);
+					vMultScal(temp,prop,r1par);
+					vSubtr(r1,r1par,r1per);
+					ro = vNorm(r1per);
+					z = temp;
+					if(ro != 0) vNormalize(r1per);
+					else LogError(ONE_POS,"electron hit a dipole, this is currently not supported, ro = "EFORM, ro);
+
+					//printf("z = "EFORM"\n",z);
+					//printf("b = "EFORM"\n",ro);
+					//printf("gamma = "EFORM"\n",creal(1./gamma_eps_inv));
+
+					e_wb_gv = e_w_gv*ro;
+					cik01_(&e_wb_gv, &t1, &t2, &t3, &t4, &t7, &t5, &t8, &t6);
+					//printf("e_wb_gv\t=\t"CFORM"\n",REIM(e_wb_gv));
+					//printf("besselK0re\t=\t"EFORM"\n",creal(t7));
+					//printf("besselK0im\t=\t"EFORM"\n",cimag(t7));
+					//printf("besselK1re\t=\t"EFORM"\n",creal(t8));
+					//printf("besselK1im\t=\t"EFORM"\n",cimag(t8));
+
+					t4 = imExp(e_w_v*z);
+					//printf("imExp = "CFORM"\n",t4);
+					cvMultScal_RVec(t4*t8,r1per,v1);
+					cvMultScal_RVec((-I)*gamma_eps_inv*t4*t7,prop,v2);
+					cvAdd(v1,v2,v3);
+					cvMultScal_cmplx(2*e_pref,v3,b+j); //E_inc
+					//printf("Einc\t=\t"CFORM3V"\n",REIM3V(b+j));
+
+					t4 = conj(t4);
+					cvMultScal_RVec(-t4*t8,r1per,v1);
+					cvMultScal_RVec((-I)*gamma_eps_inv*t4*t7,prop,v2);
+					cvAdd(v1,v2,v3);
+					cvMultScal_cmplx(2*e_pref,v3,E1+j); //E_1
+					//printf("E1\t=\t"CFORM3V"\n",REIM3V(E1+j));
+				}
+
 			}
 			return;
 

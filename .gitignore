@@ -8,3 +8,6 @@
 # for Eclipse
 .сproject
 .project 
+*.xml
+.cproject
+misc/ADDAwrapper/__pycache__/ADDAwrapper.cpython-39.pyc

@@ -1,0 +1,29 @@
+                    PHI(rad)   cos(THETA)
+EPS                    0         0
+Refinement stages:
+Minimum                2         2
+Maximum                3         3
+lower boundary         0         0
+upper boundary         6.28319   1
+equivalent min&max     true      false
+periodic               true      false
+
+
+Outer-Loop	Inner Loop
+Inner_qromb converged only to d=0 for cosine value #0
+Inner_qromb converged only to d=1.13685e-16 for cosine value #8
+init		16 integrand-values were used.
+Inner_qromb converged only to d=0.000291754 for cosine value #4
+1		8 integrand-values were used.
+Inner_qromb converged only to d=0.000858718 for cosine value #2
+Inner_qromb converged only to d=4.90123e-05 for cosine value #6
+2		16 integrand-values were used.
+Inner_qromb converged only to d=0.00128178 for cosine value #1
+Inner_qromb converged only to d=0.000528548 for cosine value #3
+Inner_qromb converged only to d=0.000137248 for cosine value #5
+Inner_qromb converged only to d=9.28074e-06 for cosine value #7
+3		32 integrand-values were used.
+9 inner integrations did not converge.
+The outer integration did not converge
+The outer integration reached d=0.00200719
+In total 72 evaluations were used

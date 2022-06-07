@@ -404,7 +404,7 @@ void MuellerMatrix(void)
 //======================================================================================================================
 
 static bool TestSymVec(const double a[static 3])
-/* tests whether a and -a are equivalent under existing symmetries of the scattering problem, i.e. if there exist a
+/* tests whether a and -a are equivalent under existing symmetries of the scattering problem, i.e. if there exists a
  * combination of symmetries that transforms a into -a. In particular, symR is sufficient for any vector in xy-plane,
  * since double such rotation is equivalent to the in-plane inversion.
  */
@@ -808,8 +808,9 @@ static void CalcIntegralScatQuantities(const enum incpol which)
 				//Csca = Cext-Cabs;
 				//PrintBoth(CCfile,"Csca=Cext-Cabs\t= "GFORM"\nQsca\t= "GFORM"\n",Csca,Csca*inv_G);
 				if (calc_Csca){
-					//Pcl = (Cenh - (Cext - Csca))/((FOUR_PI*WaveNum)*PI*hbar*hbar_ev);
 					Pcl = creal(mhost)*0.1*(Cenh - (Cext - Csca))/(FOUR_PI*PI*hbar_SI*hbar_ev*WaveNum0); //SI units are used, assuming C is in nm^2
+					//Pcl = creal(mhost)*0.1*Csca/(FOUR_PI*PI*hbar_SI*hbar_ev*WaveNum0); //SI units are used, assuming C is in nm^2
+					//Pcl = creal(mhost)*0.1*(Cext - Cabs)/(FOUR_PI*PI*hbar_SI*hbar_ev*WaveNum0); //SI units are used, assuming C is in nm^2
 				}
 				else Pcl = creal(mhost)*0.1*(Cenh - Cabs)/(FOUR_PI*PI*hbar_SI*hbar_ev*WaveNum0); //SI units are used, assuming C is in nm^2
 				Pcl *= 1e-27; //(nm)^3 -> (cm)^3

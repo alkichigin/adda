@@ -1,0 +1,8 @@
+--- Spectrum for a set of points on a line: executing simulations
+Number of parallel threads: 7
+/Users/alkichigin/GitHub/adda_sub/src/seq/adda -shape prism 3 0.055248829587524 -size 180.99930939094767 -grid 128 -surf 5 2.15 0 -beam electron 200 -prop 0 0 -1 -eps 2 -sym enf -scat_matr none -no_vol_cor  -iter qmr2 -pol igt_so -int igt_so -Csca  -alldir_inp /Users/alkichigin/GitHub/adda_sub/misc/ADDAwrapper/Csca_upper_integration.txt
+mp_files: ['/Users/alkichigin/GitHub/adda_sub/misc/ADDAwrapper/refractive_index/Au_JHW.csv']
+dipole size = 1.4140571046167787 nm
+Varying position from (90.4996547, 0.0) nm to (90.4996547, 104.64022574) nm (10 points)
+Varying energy from 0.5 to 2.5 eV
+--- 2356.9 seconds
