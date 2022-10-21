@@ -23,10 +23,10 @@
 /* somnec2d is a double precision version of somnec for use with */
 /* nec2d.  an alternate version (somnec2sd) is also provided in which */
 /* computation is in single precision but the output file is written */
-/* in double precision for use with nec2d.  somnec2sd runs about twic */
+/* in double precision for use with nec2d.  somnec2sd runs about twice */
 /* as fast as the full double precision somnec2d.  the difference */
 /* between nec2d results using a for021 file from this code rather */
-/* than from somnec2sd was insignficant in the cases tested. */
+/* than from somnec2sd was insignificant in the cases tested. */
 
 /* changes made by j bergervoet, 31-5-95: */
 /* parameter 0. --> 0.d0 in calling of routine test */
@@ -73,7 +73,7 @@
  * https://github.com/adda-team/adda/issues/176
  * If you get convergence errors, increase MAXH further
  */
-#define MAXH	500
+#define MAXH	5000
 #define CRIT	1.0E-4
 #define NM	131072
 #define NTS	4
@@ -249,8 +249,8 @@ void evlua(double zphIn,double rhoIn, complex double *erv, complex double *ezv,
   if( rho > del )
     del=rho;
 
-  if(zph >= 2.*rho)
-  {
+  //if(zph >= 2.*rho)
+  //{
     /* bessel function form of sommerfeld integrals */
     jh=0;
     a=0;
@@ -284,7 +284,8 @@ void evlua(double zphIn,double rhoIn, complex double *erv, complex double *ezv,
 
     return;
 
-  } /* if(zph >= 2.*rho) */
+  //} // if(zph >= 2.*rho)
+
 
   /* hankel function form of sommerfeld integrals */
   jh=1;
@@ -354,8 +355,7 @@ void evlua(double zphIn,double rhoIn, complex double *erv, complex double *ezv,
       sum[i]=-ans[i];
 
     rmis=creal(ck1)*1.01;
-    if( (ck2+1.) > rmis )
-      rmis=ck2+1.;
+    if((ck2+1.) > rmis) rmis=ck2+1.03;
 
     bk=cmplx(rmis,.99*cimag(ck1));
     delta=bk-cp3;

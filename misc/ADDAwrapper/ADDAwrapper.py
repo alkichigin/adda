@@ -20,12 +20,12 @@ def addaexec_find(mode="seq"):
 
 def label_for_plot(match):
     if match[0] == "P":
-        if match[1:] == "ext": return "P" + r"$_{\rm ext}$" + ", eV$^{-1}$"
-        return match[0] + r"$_{\rm " + match[1:].upper() + "}$" + ", eV$^{-1}$"
+        if match[1:] == "ext": return r"$\it{PCQ}$" + r"$_{\rm ext}$" + ", eV$^{-1}$"
+        return r"$\it{" + match[0] + r"}$" + r"$_{\rm " + match[1:].upper() + "}$" + ", eV$^{-1}$"
     elif match[0] == "C":
-        return match[0] + r"$_{\rm " + match[1:] + "}$" + ", nm$^2$"
+        return r"$\it{" + match[0] + r"}$" + r"$_{\rm " + match[1:] + "}$" + ", nm$^2$"
     elif match[0] == "Q":
-        return match[0] + r"$_{\rm " + match[1:] + "}$"
+        return r"$\it{" + match[0] + r"}$" + r"$_{\rm " + match[1:] + "}$"
     else:
         return match
 
@@ -102,7 +102,7 @@ def nm_to_ev(nm):
 def parse_value(file,match):
     with open(file, "r") as file:
             for line in file:
-                if match in line:
+                if (match+"\t") in line:
                     value = float(re.findall("[ \t][-+]?\ *[0-9]+\.?[0-9]*(?:[Ee]\ *[-+]?\ *[0-9]+)?",line)[0])
                     break
     return value
@@ -119,9 +119,6 @@ def geom_gen(aw_parameters,adda_cmdlineargs):
         #cmdline = aw_parameters["adda_exec"] 
         cmdline += f" -dir {aw_parameters['dirname']}/geom"
         cmdline += " -prognosis"
-        #cmdline += " -no_vol_cor"
-        #cmdline += f" -shape {adda_cmdlineargs['shape']}"
-        #cmdline += f" -grid {adda_cmdlineargs['grid']}"
         cmdline += " -save_geom"
         cmdline += " > " + os.devnull
         os.system(cmdline)
@@ -135,7 +132,6 @@ def geometry(geom_path,colorlist=None,half=False):
                     skip_header=1
     data = np.genfromtxt(geom_path, delimiter=' ', dtype="int", skip_header=skip_header)
     if half == True:
-        #data = data[(data[:,0]<.5*(max(data[:,0]) + min(data[:,0]))) | (data[:,2]<.5*(max(data[:,2]) + min(data[:,2])))] #quarter
         data = data[data[:,0]<.5*(max(data[:,0]) + min(data[:,0]))] #half
     xs, ys, zs = data[:,0], data[:,1], data[:,2]
     xs, ys, zs = xs-min(xs), ys-min(ys), zs-min(zs)
@@ -160,7 +156,7 @@ def geometry(geom_path,colorlist=None,half=False):
     fig = plt.figure()
     ax = fig.add_subplot(projection='3d')
     #print(voxels)
-    ax.voxels(x, y, z, voxels, facecolors=colors, edgecolors="black", linewidth=0.05, alpha=0.7, zorder=1)
+    ax.voxels(x, y, z, voxels, facecolors=colors, edgecolors="grey", linewidth=0.05, alpha=0.9, zorder=1)
     
     ax.set_xlim([0, xc.shape[0]])
     ax.set_ylim([0, xc.shape[1]])
@@ -200,6 +196,10 @@ def plot_setrcparams():
     # SMALL_SIZE = 16
     # MEDIUM_SIZE = 18
     # BIGGER_SIZE = 16
+    
+    # SMALL_SIZE = 24
+    # MEDIUM_SIZE = 32
+    # BIGGER_SIZE = 32
     
     plt.rc('font', **{'family': 'serif', 'serif': 'Arial'})
     plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
@@ -368,7 +368,8 @@ def spectrum_plot(match,aw_parameters):
     ax.set_ylabel(label_for_plot(match))
     #ax.legend()
     #plot_setaspect(ax)
-    fig.savefig(f"{dirname}/{match}.png", bbox_inches='tight', dpi=600)
+    #ax.set_yscale('log')
+    fig.savefig(f"{dirname}/{match}.svg", bbox_inches='tight')
     print_log(f"Saved {dirname}/{match}.png")
     return fig,ax
     
@@ -543,7 +544,8 @@ def spectrumline_plot(match, aw_parameters):
     print_log(f"Saved {dirname}/{match}_averaged.png")
     return fig1,ax1
 
-def extrapolation_execute(aw_parameters,adda_cmdlineargs,dirname):
+def extrapolation_execute(aw_parameters,adda_cmdlineargs):
+    dirname = aw_parameters["dirname"]
     aw_parameters, adda_cmdlineargs = dict(aw_parameters), dict(adda_cmdlineargs)
     start_time = time.time()
     shutil.rmtree(dirname, ignore_errors=True)
@@ -599,7 +601,8 @@ def extrapolation_execute(aw_parameters,adda_cmdlineargs,dirname):
            writer.writerow([key, value])
     print_log("--- %s seconds" % round((time.time() - start_time),2),dirname)
 
-def extrapolation_collect(match, dirname):
+def extrapolation_collect(match, aw_parameters):
+    dirname = aw_parameters["dirname"]
     with open(f"{dirname}/ADDA_cmdlineargs.csv") as file:
         reader = csv.reader(file)
         adda_cmdlineargs = dict(reader)
@@ -629,7 +632,8 @@ def extrapolation_collect(match, dirname):
         writer.writerows(zip(a,error))
         print(f"Saved to {dirname}/{match}_fit.csv")
     
-def extrapolation_plot(match, dirname):
+def extrapolation_plot(match, aw_parameters):
+    dirname = aw_parameters["dirname"]
     data = np.genfromtxt(f"{dirname}/{match}.csv",delimiter=',')[1:]
     fig,ax = plot_create()
     ax.plot(data[:,1], data[:,2], label=label_for_plot(match)+" (simulated)", color=color_for_plot(match), marker="o", markersize=12, linestyle="none", zorder=2)
@@ -646,7 +650,8 @@ def extrapolation_plot(match, dirname):
     plt.savefig(f"{dirname}/{match}.svg", bbox_inches='tight')
     print_log(f"Saved {dirname}/{match}.svg")
 
-def spectrum_with_extrapolation_execute(aw_parameters,adda_cmdlineargs,dirname):
+def spectrum_with_extrapolation_execute(aw_parameters,adda_cmdlineargs):
+    dirname = aw_parameters["dirname"]
     aw_parameters, adda_cmdlineargs = dict(aw_parameters), dict(adda_cmdlineargs)
     start_time = time.time()
     shutil.rmtree(dirname, ignore_errors=True)
@@ -712,7 +717,8 @@ def spectrum_with_extrapolation_execute(aw_parameters,adda_cmdlineargs,dirname):
     exec_cmdlines(cmdlines,aw_parameters["parallel_procs"])
     print_log("--- %s seconds" % round((time.time() - start_time),2),dirname)
 
-def spectrum_with_extrapolation_collect(match, dirname):
+def spectrum_with_extrapolation_collect(match, aw_parameters):
+    dirname = aw_parameters["dirname"]
     with open(f"{dirname}/ADDA_cmdlineargs.csv") as file:
         reader = csv.reader(file)
         adda_cmdlineargs = dict(reader)
@@ -740,7 +746,8 @@ def spectrum_with_extrapolation_collect(match, dirname):
         writer.writerows(zip(evs,fit_values,fit_errors))
         print(f"Saved to {dirname}/{match}_fit.csv")
 
-def spectrum_with_extrapolation_plot(match,dirname):
+def spectrum_with_extrapolation_plot(match,aw_parameters):
+    dirname = aw_parameters["dirname"]
     data = np.genfromtxt(f"{dirname}/{match}_fit.csv",delimiter=',')[1:]
     fig,ax = plot_create()
     ax.plot(data[:,0], data[:,1], label=label_for_plot(match), color=color_for_plot(match), linewidth=3)
