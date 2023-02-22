@@ -162,11 +162,11 @@ if __name__ == '__main__':
         writer.writerow(["Nmat=2"]) # The number of materials used
         writer.writerows(zip(xs,ys,zs,ms))
     
-    # fig1,ax1 = aw.geometry("geom/nanoparticle.geom",["silver", "gold"])
-    # ax1.view_init(30,-60)
-    # fig1.savefig("visual/nanoparticle.png", bbox_inches='tight', dpi=600)
-    # # ax1.axis('off')
-    # # fig1.savefig("visual/nanoparticle_axoff.png", bbox_inches='tight', dpi=600)
+    fig1,ax1 = aw.geometry("geom/nanoparticle.geom",["silver", "gold"])
+    ax1.view_init(30,-60)
+    fig1.savefig("visual/nanoparticle.png", bbox_inches='tight', dpi=600)
+    ax1.axis('off')
+    fig1.savefig("visual/nanoparticle_axoff.png", bbox_inches='tight', dpi=600)
     
     
     
@@ -180,7 +180,7 @@ if __name__ == '__main__':
     adda_cmdlineargs["size"] = 100 #nm
     
     aw_parameters["dirname"] = os.path.abspath(__file__ + "/../" + "spectrum")
-    #aw.spectrum_execute(aw_parameters,adda_cmdlineargs)
+    aw.spectrum_execute(aw_parameters,adda_cmdlineargs)
     aw.spectrum_collect("Cabs",aw_parameters)
     aw.spectrum_plot("Cabs",aw_parameters)
 

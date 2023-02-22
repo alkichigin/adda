@@ -20,7 +20,7 @@ def addaexec_find(mode="seq"):
 
 def label_for_plot(match):
     if match[0] == "P":
-        if match[1:] == "ext": return r"$\it{PCQ}$" + r"$_{\rm ext}$" + ", eV$^{-1}$"
+        if match[1:] == "ext": return r"$\it{P}$" + r"$_{\rm ext}$" + ", eV$^{-1}$"
         return r"$\it{" + match[0] + r"}$" + r"$_{\rm " + match[1:].upper() + "}$" + ", eV$^{-1}$"
     elif match[0] == "C":
         return r"$\it{" + match[0] + r"}$" + r"$_{\rm " + match[1:] + "}$" + ", nm$^2$"
@@ -117,7 +117,7 @@ def midpoints(x):
 def geom_gen(aw_parameters,adda_cmdlineargs):
         cmdline = cmdline_construct(aw_parameters,adda_cmdlineargs)
         #cmdline = aw_parameters["adda_exec"] 
-        cmdline += f" -dir {aw_parameters['dirname']}/geom"
+        cmdline += " -dir geom"
         cmdline += " -prognosis"
         cmdline += " -save_geom"
         cmdline += " > " + os.devnull
@@ -155,6 +155,7 @@ def geometry(geom_path,colorlist=None,half=False):
     
     fig = plt.figure()
     ax = fig.add_subplot(projection='3d')
+    
     #print(voxels)
     ax.voxels(x, y, z, voxels, facecolors=colors, edgecolors="grey", linewidth=0.05, alpha=0.9, zorder=1)
     
@@ -219,9 +220,10 @@ def exec_cmdlines(cmdlines,parallel_procs):
         result_list_tqdm.append(result)
     return result_list_tqdm
 
-def varyany_execute(aw_parameters,adda_cmdlineargs,dirname,var,var_range):
+def varyany_execute(aw_parameters,adda_cmdlineargs,var,var_range):
     aw_parameters, adda_cmdlineargs = dict(aw_parameters), dict(adda_cmdlineargs)
     start_time = time.time()
+    dirname = aw_parameters["dirname"]
     shutil.rmtree(dirname, ignore_errors=True)
     os.makedirs(dirname, exist_ok=True)
     os.makedirs(f"{dirname}/ADDA_output", exist_ok=True)
@@ -230,17 +232,8 @@ def varyany_execute(aw_parameters,adda_cmdlineargs,dirname,var,var_range):
     print_log(f"Number of parallel threads: {aw_parameters['parallel_procs']}",dirname)
     if var in adda_cmdlineargs:
         del adda_cmdlineargs[var]
-    mp_file = aw_parameters["mp_file"]
-    ev = aw_parameters["ev"]
-    mdata = mp_single_read(mp_file,ev)
-    lam = ev_to_nm(ev)
-    adda_cmdlineargs["lambda"] = lam
-    mre = mdata[1]
-    mim = mdata[2]
-    adda_cmdlineargs["m"] = f"{mre} {mim}"
     cmdline = cmdline_construct(aw_parameters,adda_cmdlineargs)
     print_log(f"{cmdline}",dirname)
-    print_log(f"mp = {mre} + {mim}*I",dirname)
     print_log(f"Varying {var} from {var_range[0]} to {var_range[-1]}",dirname)
     cmdlines = []
     for i in var_range:
@@ -254,7 +247,8 @@ def varyany_execute(aw_parameters,adda_cmdlineargs,dirname,var,var_range):
     exec_cmdlines(cmdlines,aw_parameters["parallel_procs"])
     print_log("--- %s seconds" % round((time.time() - start_time),2),dirname)
     
-def varyany_collect(match,dirname, silent=False):
+def varyany_collect(match,aw_parameters,silent=False):
+    dirname = aw_parameters["dirname"]
     xs = sorted([d.name for d in os.scandir(f"{dirname}/ADDA_output") if d.is_dir()])
     #print(xs)
     values = []
@@ -266,17 +260,18 @@ def varyany_collect(match,dirname, silent=False):
         writer.writerows(zip(xs,values))
         print_log(f"Saved {dirname}/{match}.csv", silent=silent)
         
-def varyany_plot(match,dirname):
+def varyany_plot(match,aw_parameters):
+    dirname = aw_parameters["dirname"]
     data = np.genfromtxt(f"{dirname}/{match}.csv", delimiter=',')[1:]
     fig,ax = plot_create()
-    ax.plot(data[:,0], data[:,1], label=label_for_plot(match), color=color_for_plot(match), linestyle="none", marker=".")
+    ax.plot(data[:,0], data[:,1], label=label_for_plot(match), color=color_for_plot(match), marker=".", markersize=10)
     ax.set_xlim([min(data[:,0]),max(data[:,0])])
     ax.set_ylabel(label_for_plot(match))
     #ax.legend()
     plot_setaspect(ax)
     ax.set_xlabel("")
-    fig.savefig(f"{dirname}/{match}.svg", bbox_inches='tight')
-    print_log(f"Saved {dirname}/{match}.svg")
+    fig.savefig(f"{dirname}/{match}.png", bbox_inches='tight')
+    print_log(f"Saved {dirname}/{match}.pdf")
 
 def spectrum_execute(aw_parameters,adda_cmdlineargs):
     aw_parameters, adda_cmdlineargs = dict(aw_parameters), dict(adda_cmdlineargs)
@@ -370,7 +365,7 @@ def spectrum_plot(match,aw_parameters):
     #plot_setaspect(ax)
     #ax.set_yscale('log')
     fig.savefig(f"{dirname}/{match}.svg", bbox_inches='tight')
-    print_log(f"Saved {dirname}/{match}.png")
+    print_log(f"Saved {dirname}/{match}.svg")
     return fig,ax
     
 def spectrumline_execute(aw_parameters,adda_cmdlineargs):
@@ -538,10 +533,10 @@ def spectrumline_plot(match, aw_parameters):
     #ax1.set_yscale('log')
     plot_setaspect(ax1)
     plot_setaspect(ax2)
-    fig1.savefig(f"{dirname}/{match}.png", bbox_inches='tight', dpi=600)
-    print_log(f"Saved {dirname}/{match}.png")
-    fig2.savefig(f"{dirname}/{match}_averaged.png", bbox_inches='tight', dpi=600)
-    print_log(f"Saved {dirname}/{match}_averaged.png")
+    fig1.savefig(f"{dirname}/{match}.svg", bbox_inches='tight', dpi=600)
+    print_log(f"Saved {dirname}/{match}.svg")
+    fig2.savefig(f"{dirname}/{match}_averaged.svg", bbox_inches='tight', dpi=600)
+    print_log(f"Saved {dirname}/{match}_averaged.svg")
     return fig1,ax1
 
 def extrapolation_execute(aw_parameters,adda_cmdlineargs):
@@ -854,7 +849,7 @@ def scan_collect(match, aw_parameters):
         writer.writerows(zip(xs,ys,values))
         print(f"Saved to {dirname}/{match}.csv")
 
-def scan_plot(match, aw_parameters, details=True):
+def scan_plot(match, aw_parameters, details=True, norm=None):
     aw_parameters = dict(aw_parameters)
     dirname = aw_parameters["dirname"]
     with open(f"{dirname}/ADDA_cmdlineargs.csv") as file:
@@ -881,8 +876,7 @@ def scan_plot(match, aw_parameters, details=True):
     plot_setrcparams()
     ax.set_aspect('equal')
     d = size/grid
-    from matplotlib.colors import LogNorm
-    im = ax.imshow(z, extent=(min(xs)-d/2, max(xs)+d/2, min(ys)-d/2, max(ys)+d/2), origin="lower", cmap="rainbow")#, norm=LogNorm(vmin=0.01, vmax=1))
+    im = ax.imshow(z, extent=(min(xs)-d/2, max(xs)+d/2, min(ys)-d/2, max(ys)+d/2), origin="lower", cmap="rainbow", norm=norm)
     #plt.scatter(x, y, c=z, marker="s") # scatter is the most stable function for visualization, so use this for debugging
     ax.set_xlabel(f"{axNames[0]}, nm")
     ax.set_ylabel(f"{axNames[1]}, nm")
@@ -894,6 +888,6 @@ def scan_plot(match, aw_parameters, details=True):
     else:
         plt.axis('off')
 
-    plt.savefig(f"{dirname}/{match}.png", bbox_inches='tight',dpi=600)
-    print_log(f"Saved {dirname}/{match}.png")
+    plt.savefig(f"{dirname}/{match}.svg", bbox_inches='tight',dpi=600)
+    print_log(f"Saved {dirname}/{match}.svg")
 

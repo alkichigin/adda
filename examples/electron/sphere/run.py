@@ -30,7 +30,7 @@ adda_cmdlineargs = dict(
     # Particle
     shape = "sphere",
     size = 40, #[nm]
-    grid = 16, #dipoles per x-axis size of the particle
+    grid = 32, #dipoles per x-axis size of the particle
     mhost = "1 0", #refractive index of the host medium
     
     # Beam
@@ -49,23 +49,23 @@ adda_cmdlineargs = dict(
     pol = "igt_so", #Polarizability prescription
     int = "igt_so", #Interaction term
     Csca = "", #Calculate Csca with the Romberg integral. Needed to properly calculate Cathodoluminesce
-    alldir_inp = os.path.abspath(__file__ + "/../../../../misc/ADDAwrapper/Csca_integration.txt")
+    alldir_inp = os.path.abspath(__file__ + "/../../../../misc/ADDAwrapper/Csca_default.txt")
 )
 
 ### Executing commands
 if __name__ == '__main__': 
     
-    # aw_parameters["dirname"] = os.path.abspath(__file__ + "/../")
-    # os.makedirs("geom",exist_ok=True)
-    # aw.geom_gen(aw_parameters,adda_cmdlineargs)
-    # fig1,ax1 = aw.geometry(f"geom/{adda_cmdlineargs['shape']}.geom")
-    # ax1.view_init(30,-50)
-    # ax1.axis('off')
-    # fig1.savefig(f"{adda_cmdlineargs['shape']}.pdf", bbox_inches='tight', dpi=600)
+    aw_parameters["dirname"] = os.path.abspath(__file__ + "/../")
+    os.makedirs("geom",exist_ok=True)
+    aw.geom_gen(aw_parameters,adda_cmdlineargs)
+    fig1,ax1 = aw.geometry(f"geom/{adda_cmdlineargs['shape']}.geom")
+    ax1.view_init(30,-50)
+    ax1.axis('off')
+    fig1.savefig(f"{adda_cmdlineargs['shape']}.pdf", bbox_inches='tight')
     
     # Execute spectrum
     aw_parameters["dirname"] = os.path.abspath(__file__ + "/../" + "spectrum")
-    #aw.spectrum_execute(aw_parameters,adda_cmdlineargs)
+    aw.spectrum_execute(aw_parameters,adda_cmdlineargs)
     # Collect and plot EELS probabilities
     aw.spectrum_collect("Peels",aw_parameters)
     aw.spectrum_plot("Peels",aw_parameters)
@@ -73,27 +73,27 @@ if __name__ == '__main__':
     aw.spectrum_collect("Pcl",aw_parameters)
     aw.spectrum_plot("Pcl",aw_parameters)
 
-    # # Execute extrapolation for single energy ev
-    # dirname = os.path.abspath(__file__ + "/../" + "extrapolation")
-    # aw.extrapolation_execute(aw_parameters,adda_cmdlineargs,dirname)
-    # # Collect and plot EELS probabilities for different y~1/grid with extrapolated value in y=0 (with errorbar)
-    # aw.extrapolation_collect("Peels",dirname)
-    # aw.extrapolation_plot("Peels",dirname)
+    # Execute extrapolation for single energy ev
+    aw_parameters["dirname"] = os.path.abspath(__file__ + "/../" + "extrapolation")
+    aw.extrapolation_execute(aw_parameters,adda_cmdlineargs)
+    # Collect and plot EELS probabilities for different y~1/grid with extrapolated value in y=0 (with errorbar)
+    aw.extrapolation_collect("Peels",aw_parameters)
+    aw.extrapolation_plot("Peels",aw_parameters)
     
-    # # Execute spectrum with extrapolation at each energy ev
-    # dirname = os.path.abspath(__file__ + "/../" + "spectrum_with_extrapolation")
-    # aw.spectrum_with_extrapolation_execute(aw_parameters,adda_cmdlineargs,dirname)
-    # # Collect and plot fit EELS probabilities spectrum (with errorbar)
-    # aw.spectrum_with_extrapolation_collect("Peels",dirname)
-    # aw.spectrum_with_extrapolation_plot("Peels",dirname)
+    # Execute spectrum with extrapolation at each energy ev
+    aw_parameters["dirname"] = os.path.abspath(__file__ + "/../" + "spectrum_with_extrapolation")
+    aw.spectrum_with_extrapolation_execute(aw_parameters,adda_cmdlineargs)
+    # Collect and plot fit EELS probabilities spectrum (with errorbar)
+    aw.spectrum_with_extrapolation_collect("Peels",aw_parameters)
+    aw.spectrum_with_extrapolation_plot("Peels",aw_parameters)
     
-    # # Execute scan of particle's cross-section for single energy ev
-    # dirname = dirname = os.path.abspath(__file__ + "/../" + "scan")
-    # aw.scan_execute(aw_parameters,adda_cmdlineargs,dirname)
-    # # Collect and map scanned EELS probabilities on particle's cross-section
-    # aw.scan_collect("Peels",dirname)
-    # aw.scan_plot("Peels",dirname)
-    # aw.scan_collect("Pcl",dirname)
-    # aw.scan_plot("Pcl",dirname)
+    # Execute scan of particle's cross-section for single energy ev
+    aw_parameters["dirname"] = dirname = os.path.abspath(__file__ + "/../" + "scan")
+    aw.scan_execute(aw_parameters,adda_cmdlineargs)
+    # Collect and map scanned EELS probabilities on particle's cross-section
+    aw.scan_collect("Peels",aw_parameters)
+    aw.scan_plot("Peels",aw_parameters)
+    aw.scan_collect("Pcl",aw_parameters)
+    aw.scan_plot("Pcl",aw_parameters)
 
 
