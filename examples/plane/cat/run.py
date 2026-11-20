@@ -79,8 +79,8 @@ if __name__ == '__main__':
     fig1,ax1 = aw.geometry("cat_rotated.geom", ["silver"])
     ax1.view_init(30,-30)
     fig1.savefig("cat_axis.png", bbox_inches='tight', dpi=1200)
-    ax1.axis('off')
-    fig1.savefig("cat.pdf", bbox_inches='tight')
+    # ax1.axis('off')
+    # fig1.savefig("cat.pdf", bbox_inches='tight')
     
     
     
@@ -95,51 +95,18 @@ if __name__ == '__main__':
     aw.spectrum_collect("Csca",aw_parameters)
     aw.spectrum_plot("Csca",aw_parameters)
 
-
-    data = np.genfromtxt(f"{aw_parameters['dirname']}/ADDA_output/400.0/IntField-Y", delimiter=' ', dtype="float", skip_header=1)
-    data = np.array(data[:,0:4])
-    with open(f"{aw_parameters['dirname']}/addafield.csv", 'w') as file:
-        writer = csv.writer(file, delimiter=',', lineterminator='\n')
-        writer.writerow(["y","z","|E|^2"])
-        writer.writerows(zip(data[:,0],data[:,1],data[:,2],data[:,3]))
-    
-
-    #data = data[data[:,0] > 5]
-        
-    
-    out = []
-    for y in np.unique(data[:,1]):
-        for z in np.unique(data[:,2]):
-            out.append([y,z,0])
-    out = np.asarray(out)
-    
-    
-    with open(f"{aw_parameters['dirname']}/out_zeros.csv", 'w') as file:
-        writer = csv.writer(file, delimiter=',', lineterminator='\n')
-        writer.writerow(["y","z","|E|^2"])
-        writer.writerows(zip(out[:,0],out[:,1],out[:,2]))
-    #aw.scan_plot("out_zeros",aw_parameters)
-    
-    
-    for ind,s in enumerate(out):
-        for i in np.unique(data[:,0]):
-            data1 = data[data[:,0] == i]
-            E = data1[
-                (data1[:,1] == s[0]) & (data1[:,2] == s[1])
-                ]
-            if E.any():
-                #print(test)
-                out[ind][2] += E[0][3]
-    
-    out[:,2] = out[:,2]/max(out[:,2])
-    with open(f"{aw_parameters['dirname']}/out.csv", 'w') as file:
-        writer = csv.writer(file, delimiter=',', lineterminator='\n')
-        writer.writerow(["y","z","|E|^2"])
-        writer.writerows(zip(out[:,0],out[:,1],out[:,2]))
     
     from matplotlib.colors import LogNorm
-    aw.scan_plot("out",aw_parameters,norm=LogNorm(vmin=0.01, vmax=1))
-
+    lam = "400.0"
+    
+    aw.field_projection(aw_parameters,"y","z",lam,"Y")
+    aw.scan_plot(f"field_projection_{lam}",aw_parameters,norm=LogNorm(vmin=0.01, vmax=1))
+    
+    aw.field_projection(aw_parameters,"x","z",lam,"Y")
+    aw.scan_plot(f"field_projection_{lam}",aw_parameters,norm=LogNorm(vmin=0.01, vmax=1))
+    
+    aw.field_projection(aw_parameters,"y","x",lam,"Y")
+    aw.scan_plot(f"field_projection_{lam}",aw_parameters,norm=LogNorm(vmin=0.01, vmax=1))
 
 
 

@@ -30,7 +30,7 @@ adda_cmdlineargs = dict(
     # Particle
     shape = "sphere",
     size = 150, #[nm]
-    grid = 32, #dipoles per x-axis size of the particle
+    grid = 128, #dipoles per x-axis size of the particle
     mhost = "2 0", #refractive index of the host medium
     
     # Beam

@@ -162,7 +162,7 @@ if __name__ == '__main__':
         writer.writerow(["Nmat=2"]) # The number of materials used
         writer.writerows(zip(xs,ys,zs,ms))
     
-    fig1,ax1 = aw.geometry("geom/nanoparticle.geom",["silver", "gold"])
+    fig1,ax1 = aw.geometry("geom/nanoparticle.geom",["silver", "gold"],half=True)
     ax1.view_init(30,-60)
     fig1.savefig("visual/nanoparticle.png", bbox_inches='tight', dpi=600)
     ax1.axis('off')

@@ -1,4 +1,4 @@
-import sys, os, multiprocessing, numpy as np
+import sys, os, psutil, numpy as np
 if sys.path[1] != os.path.abspath(__file__ + "/../../../../misc/ADDAwrapper") : sys.path.insert(1,os.path.abspath(__file__ + "/../../../../misc/ADDAwrapper")) #This is to import ADDA wrapper from parent directory
 import ADDAwrapper as aw
 
@@ -6,23 +6,27 @@ import ADDAwrapper as aw
 aw_parameters = dict(
     #adda_exec = os.path.abspath(__file__ + "/../../../../win64/adda.exe"), #path to ADDA executable
     adda_exec = aw.addaexec_find(mode="seq"), #path to ADDA executable
-    parallel_procs = multiprocessing.cpu_count()-1, #number of parallel processes is equal to the number of processor cores minus 1
+    parallel_procs = psutil.cpu_count(logical=False)-1, #number of parallel processes is equal to the number of processor cores minus 1
 
     mp_files = [os.path.abspath(__file__ + "/../../../../misc/ADDAwrapper/refractive_index/" + "Ag_JHW.csv")], #file with refractive index of the particle, each string contains: ev,mp_re,mp_im
     ev_range = np.arange(2.5,4.5+.01,0.05), #[eV]. Used in "spectrum_" functions. (ev_min,ev_max,step): range from ev_min[eV] to ev_max[eV]
     ev = 3.45, #[eV]. Used in "scan_" and "extrapolation_" functions.
     
+    #Used in "spectrumline_" functions
     spectrumline_startpoint = (0,50), # (x,y) [nm]
     spectrumline_endpoint = (50,50), # (x,y) [nm]
     spectrumline_points = 10, #how many points, including startpoint and endpoint
     
-    #Used in "scan_" functions. Beam propagation must be orthogonal to the grid.
-    #So "prop" must be "0 0 whatever" and rotations with "orient" must be made by 90 degrees.
-    scan_x_range = (0,30), #[nm], (x_left, x_right)
-    scan_y_range = (0,30), #[nm], (y_bottom, y_top)
-    scan_step = 1 #dipoles per each step, must be an integer >= 1
-    #The beam must always blast exactly in the middle between the dipoles,
-    #so start and stop coordinates will be adjusted, covering more area than you entered. Obligatory to use "no_vol_cor" with scan.
+    #Used in "scan_" functions
+    scan_x_range = (-0,30), #[nm], (x_left, x_right)
+    scan_y_range = (-30,30), #[nm], (y_bottom, y_top)
+    scan_step = 1, #dipoles per each step, must be an integer >= 1
+    
+    #rotation of the scan grid
+    prop = "0 0 -1", #propagation of the beam before rotation
+    x_deg = 0, #rotation over x-axis, as in single-tilt holder
+    z_deg = 0, #then rotation over z-axis
+    shift = 10, #[nm], shift along prop direction
 )
 
 # ADDA command line arguments
@@ -89,6 +93,7 @@ if __name__ == '__main__':
     
     # Execute scan of particle's cross-section for single energy ev
     aw_parameters["dirname"] = dirname = os.path.abspath(__file__ + "/../" + "scan")
+    aw.scan_grid(aw_parameters,adda_cmdlineargs) #prepare coordinates
     aw.scan_execute(aw_parameters,adda_cmdlineargs)
     # Collect and map scanned EELS probabilities on particle's cross-section
     aw.scan_collect("Peels",aw_parameters)

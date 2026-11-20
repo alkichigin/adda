@@ -766,6 +766,17 @@ static void CalcIntegralScatQuantities(const enum incpol which)
 			SnprintfErr(ONE_POS,fname_cs,MAX_FNAME,"%s/"F_CS"%s",directory,f_suf);
 			CCfile=FOpenErr(fname_cs,"w",ONE_POS);
 			if (calc_Cext) PrintBoth(CCfile,"Cext\t= "GFORM"\nQext\t= "GFORM"\n",Cext,Cext*inv_G);
+
+			//temp
+			if (calc_Cext) {
+				double Pext;
+				double hbar_SI = 1.054571817e-34;
+				double hbar_ev = 6.582119569e-16;
+				Pext = creal(mhost)*0.1*Cext/(FOUR_PI*PI*hbar_SI*hbar_ev*WaveNum0); //SI units are used, assuming Cenh is in nm^2
+				Pext *= 1e-27; //(nm)^3 -> (cm)^3
+				PrintBoth(CCfile,"Pext\t= "EFORM"\n",Pext);
+			}
+
 			if (calc_Cabs) PrintBoth(CCfile,"Cabs\t= "GFORM"\nQabs\t= "GFORM"\n",Cabs,Cabs*inv_G);
 			if (beamtype==B_DIPOLE || beamtype==B_ELECTRON) {
 				Cenh=EnhCross(); // this is here to be run by all processors

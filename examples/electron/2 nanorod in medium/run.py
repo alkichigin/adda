@@ -15,9 +15,15 @@ aw_parameters = dict(
     #So "prop" must be "0 0 whatever" and rotations with "orient" must be made by 90 degrees.
     scan_x_range = (-15,15), #[nm], (x_left, x_right)
     scan_y_range = (-50,50), #[nm], (y_bottom, y_top)
-    scan_step = 1 #dipoles per each step, must be an integer >= 1. Set to 1 for the finest resolution.
+    scan_step = 1, #dipoles per each step, must be an integer >= 1. Set to 1 for the finest resolution.
     #The beam must always blast exactly in the middle between the dipoles,
     #so start and stop coordinates will be adjusted, covering more area than you entered. Obligatory to use "no_vol_cor" with scan.
+    
+    #rotation of the scan grid
+    prop = "0 0 -1", #propagation of the beam before rotation
+    x_deg = 0, #rotation over x-axis, as in single-tilt holder
+    z_deg = 0, #then rotation over z-axis
+    shift = 10, #[nm], shift along prop direction
 )
 
 hd = (92.6-7.8)/7.8
@@ -66,7 +72,8 @@ if __name__ == '__main__':
     
     # Execute scan of particle's cross-section for single energy ev
     aw_parameters['dirname'] = os.path.abspath(__file__ + "/../" + "scan2.4")
-    aw_parameters["ev"] = 1.8
+    aw_parameters["ev"] = 2.4
+    aw.scan_grid(aw_parameters,adda_cmdlineargs) #prepare coordinates
     aw.scan_execute(aw_parameters,adda_cmdlineargs)
     # Collect and map scanned EELS/CL probabilities on particle's cross-section
     aw.scan_collect("Peels",aw_parameters)

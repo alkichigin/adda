@@ -24,6 +24,7 @@ void InitRotation(void);
 double ExtCross(const double * restrict incPol);
 double AbsCross(void);
 double EnhCross(void);
+void CrossSec_VolumeIntegral(double CscaTotal_CextTotal[static restrict 2]);
 double ScaCross(const char *f_suf);
 void ReadAlldirParms(const char * restrict fname);
 void ReadAvgParms(const char * restrict fname);
