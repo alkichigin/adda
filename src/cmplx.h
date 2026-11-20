@@ -248,6 +248,97 @@ static inline doublecomplex incJ(const int nu, const doublecomplex arg, const do
 }
 
 //======================================================================================================================
+/* Generalized exponential integral and incomplete modified Bessel functions K_nu(zeta,eta) of the substrate-aware
+ * electron field. Equation numbers refer to the Supporting Information of the substrate EELS/CL paper (S-equations).
+ */
+#define EULER_GAMMA 0.57721566490153286061
+
+static inline doublecomplex cExpIntE(const int n, const doublecomplex x)
+/* generalized exponential integral E_n(x) = int_1^inf exp(-x t)/t^n dt for integer n>=0 and Re(x)>=0, x!=0;
+ * power series for |x|<=1 and modified Lentz continued fraction otherwise (the standard algorithm, cf. DLMF 8.19.8,
+ * 8.19.17). For n<=0 the closed form is used (eq. S38 for n=0).
+ */
+{
+	const double eps=1e-16;
+	const int maxit=5000;
+	int i,ii;
+	if (n==0) return cexp(-x)/x;
+	if (cabs(x)<=1) {
+		const int nm1=n-1;
+		doublecomplex ans,fact=1,del,psi;
+		ans = (nm1!=0) ? 1.0/nm1 : -clog(x)-EULER_GAMMA;
+		for (i=1;i<=maxit;i++) {
+			fact *= -x/i;
+			if (i!=nm1) del = -fact/(i-nm1);
+			else {
+				psi = -EULER_GAMMA;
+				for (ii=1;ii<=nm1;ii++) psi += 1.0/ii;
+				del = fact*(-clog(x)+psi);
+			}
+			ans += del;
+			if (cabs(del)<cabs(ans)*eps) return ans;
+		}
+		return ans;
+	}
+	else {
+		const double tiny=1e-300;
+		doublecomplex b=x+n,c=1/tiny,d=1/b,h=d,an,del;
+		for (i=1;i<=maxit;i++) {
+			an = -i*(double)(n-1+i);
+			b += 2;
+			d = an*d+b;
+			if (cabs(d)<tiny) d=tiny;
+			c = b+an/c;
+			if (cabs(c)<tiny) c=tiny;
+			d = 1/d;
+			del = c*d;
+			h *= del;
+			if (cabs(del-1)<eps) break;
+		}
+		return h*cexp(-x);
+	}
+}
+
+static inline doublecomplex incKS33(const int nu, const doublecomplex zeta, const doublecomplex eta, const double tol)
+/* K_nu(zeta,eta) by the series in generalized exponential integrals, eq. (S33); efficient for small |zeta exp(-eta)|,
+ * i.e. for large Re(eta) - exactly the case of grazing beams, where eq. (S22) overflows
+ */
+{
+	const int maxit=500;
+	const doublecomplex x=zeta*cexp(eta)/2, y=zeta*cexp(-eta)/2, ep=cexp(nu*eta), em=cexp(-nu*eta);
+	doublecomplex sum=0,fn=1,term; // fn = (-y)^n/n!
+	int n;
+	for (n=0;n<maxit;n++) {
+		if (n>0) fn *= -y/n;
+		term = fn/2*(ep*cExpIntE(n+1-nu,x) + em*cExpIntE(n+1+nu,x));
+		sum += term;
+		if (n>=1 && cabs(term)<=tol*cabs(sum)) break;
+	}
+	return sum;
+}
+
+static inline doublecomplex incK(const int nu, const doublecomplex zeta, const doublecomplex eta, const double tol)
+/* incomplete modified Bessel function K_nu(zeta,eta) = K_nu(zeta) - J(zeta,nu,eta), eq. (S17), for nu=0,1:
+ * Re(eta)<0 is reduced to Re(eta)>0 by eq. (S18); |zeta|>=20 - large-argument expansion (S25), with n! b_n;
+ * small |zeta exp(eta)| - series (S22); otherwise - series (S33).
+ */
+{
+	doublecomplex t1,t2,t3,t4,t5,t6,K0,K1,Kfull;
+	if (creal(eta)<0) {
+		cik01_((doublecomplex *)&zeta,&t1,&t2,&t3,&t4,&K0,&t5,&K1,&t6);
+		Kfull = (nu==0) ? K0 : K1;
+		return 2*Kfull - incK(nu,zeta,-eta,tol);
+	}
+	if (cabs(zeta)>=20) return incKpos(nu,zeta,eta);
+	if (cabs(zeta*cexp(eta))<=2) {
+		cik01_((doublecomplex *)&zeta,&t1,&t2,&t3,&t4,&K0,&t5,&K1,&t6);
+		Kfull = (nu==0) ? K0 : K1;
+		return Kfull - incJs(nu,zeta,eta,tol);
+	}
+	return incKS33(nu,zeta,eta,tol);
+}
+
+//======================================================================================================================
 
 static inline doublecomplex cExpM1(const doublecomplex a)
 /* Complex analogue of expm1 function ( exp(a) - 1 ), should be used for small arguments to avoid precision loss

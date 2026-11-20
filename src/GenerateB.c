@@ -71,7 +71,7 @@ static double e_w_v;   // prefactor in an argument of a phase exponent in the in
 static doublecomplex e_w_gv1, e_w_gv2;  // prefactor in an argument of the BesselK, incBesselJ in the incident field of the electron
 static doublecomplex eps1, eps2; //dielectric permittivity of the media above and below the plane surface
 static doublecomplex vgw, vgw2; //Some constants for the field of an electron
-static const bool tilted_regularization_enabled = false; // toggle projected-grid regularization for tilted electron beams
+static doublecomplex e_w;        // parameter w of eq (S12): coth(w)=beta1, branch continuous from beta1>1 (Im w<=0)
 #ifndef NO_FORTRAN
 static int besN;                  // Bessel beam order
 static double besAlpha;           // half-cone angle (in radians)
@@ -92,462 +92,101 @@ void bjndd_(const int *n,const double *x,double *bj,double *dj,double *fj);
 
 
 
-static void ElectronFullLineField(const double obs[static 3],const double center[static 3],const double dir[static 3],
+/* Field of the electron near a plane interface (substrate), image approximation for the incident field.
+ * The implementation follows the Supporting Information of the substrate EELS/CL paper (equation numbers S..):
+ *   F0(r-r0,v) - eq (S55), full-line field in homogeneous medium 1;
+ *   F(r,r0,v)  - eq (S79), field of the part of the trajectory below the interface, with the endpoint terms
+ *                of the transmitted and reflected half-lines cancelled analytically (eq S78);
+ *   E_inc = -C{F0(r-r0,v) + r_st[F(r,r0,v) + F(r,~r0,~v)]}, eq (S82);
+ *   E_a   = +C{F0(r-r0,-v) + r_st[F(r,r0,-v) + F(r,~r0,-~v)]}, eq (S84);
+ *   parallel beam (v_z=0) - eqs (S92), (S93).
+ * C = q*omega*mu0/(4*pi*beta1^2*gamma1) corresponds to e_pref1 (CGS; q_electron<0 only changes the overall sign of
+ * both fields, which is irrelevant for all computed quantities). The interface is the plane z=-hsub.
+ * The distance to each trajectory is thresholded from below by electron_rho_floor*dsX (beam placement and singularity
+ * handling, Section "Software implementation" of the SI).
+ */
+#ifndef ELECTRON_RHO_FLOOR
+#	define ELECTRON_RHO_FLOOR 0.5
+#endif
+static const double electron_rho_floor = ELECTRON_RHO_FLOOR; // threshold of the distance to the trajectory, units of dsX
+static const double incK_tol = 1e-10;         // relative tolerance of series for incomplete Bessel functions
+
+static void ElectronF0(const double obs[static 3],const double r0[static 3],const double vhat[static 3],
+	doublecomplex out[static 3])
+// F0(r-r0,v) = 2exp(i*xi*s)[K1(kt*rho)*rhohat - (i/gamma1)*K0(kt*rho)*vhat], eq (S55); vhat - unit velocity vector
+{
+	double r1[3],rhovec[3],rhohat[3]={0,0,0},s,rho;
+	doublecomplex zeta,t1,t2,t3,t4,t5,t6,K0,K1,ph;
+	int k;
+
+	LinComb(obs,r0,1,-1,r1);
+	s=DotProd(r1,vhat);
+	LinComb(r1,vhat,1,-s,rhovec);
+	rho=vNorm(rhovec);
+	if (rho>0) vMultScal(1/rho,rhovec,rhohat);
+	if (rho<electron_rho_floor*dsX) rho=electron_rho_floor*dsX;
+	zeta=e_w_gv1*rho;
+	cik01_(&zeta,&t1,&t2,&t3,&t4,&K0,&t5,&K1,&t6);
+	ph=2*imExp(e_w_v*s);
+	for (k=0;k<3;k++) out[k]=ph*(K1*rhohat[k]-I*gamma1_inv*K0*vhat[k]);
+}
+
+static void ElectronF(const double obs[static 3],const double r0[static 3],const double vhat[static 3],
+	doublecomplex out[static 3])
+/* F(r,r0,v), eq (S79): I1^(-sz)*rhohat - (i/gamma1)*I0^(-sz)*vhat + sz*exp(i*k*Rc+i*xi*p)/(kt*Rc)*(vhat-sc/rho*rhohat),
+ * with I_nu^(+-)(rho,s) = exp(i*xi*s)*K_nu(kt*rho,+-(w-u)), eq (S69); vhat[2]!=0
+ */
+{
+	const int sz=(vhat[2]>0) ? 1 : -1;
+	const double z0=r0[2]+hsub, p=-z0/vhat[2];
+	double rc[3],Rc[3],rhovec[3],rhohat[3]={0,0,0},sc,rho,Rcn,u;
+	doublecomplex eta,zeta,ph,I0,I1,last;
+	int k;
+
+	LinComb(r0,vhat,1,p,rc);         // crossing point, eq (S60)
+	LinComb(obs,rc,1,-1,Rc);         // eq (S61)
+	sc=DotProd(Rc,vhat);
+	LinComb(Rc,vhat,1,-sc,rhovec);
+	rho=vNorm(rhovec);
+	if (rho>0) vMultScal(1/rho,rhovec,rhohat);
+	if (rho<electron_rho_floor*dsX) rho=electron_rho_floor*dsX;
+	Rcn=sqrt(rho*rho+sc*sc);
+	u=asinh(sc/rho);                 // eq (S64)
+	eta=-sz*(e_w-u);
+	zeta=e_w_gv1*rho;
+	ph=imExp(e_w_v*(sc+p));          // exp(i*xi*s), s=sc+p
+	I0=ph*incK(0,zeta,eta,incK_tol);
+	I1=ph*incK(1,zeta,eta,incK_tol);
+	last=sz*imExp(WaveNum0*Rcn+e_w_v*p)/(e_w_gv1*Rcn);
+	for (k=0;k<3;k++) out[k]=I1*rhohat[k]-I*gamma1_inv*I0*vhat[k]+last*(vhat[k]-(sc/rho)*rhohat[k]);
+}
+
+static void ElectronSubstrateField(const double obs[static 3],const double r0[static 3],const double dir[static 3],
 	const bool auxiliary,doublecomplex out[static 3])
-// corrected field of the full infinite electron trajectory in a homogeneous medium;
-// this helper is consistent with the perpendicular thesis medium field in the limit dir->-ez.
+/* incident (auxiliary=false), eq (S82), or auxiliary (auxiliary=true), eq (S84), field of the electron moving along
+ * dir through r0, at point obs above the interface; the auxiliary field corresponds to inverting both q and v
+ */
 {
-	double r1[3],r1par[3],r1per[3];
-	double ro,temp,s;
-	doublecomplex arg,t1,t2,t3,t4,t5,t6,K0,K1,phase;
-	doublecomplex v1[3],v2[3],v3[3];
+	double v[3],vim[3],r0im[3];
+	doublecomplex f0[3],f1[3],f2[3];
+	const doublecomplex rst=(eps1-eps2)/(eps1+eps2);
+	const doublecomplex pref=(auxiliary ? 1 : -1)*e_pref1;
+	int k;
 
-	LinComb(obs,center,1,-1,r1);
-	temp = DotProd(r1,dir);
-	vMultScal(temp,dir,r1par);
-	vSubtr(r1,r1par,r1per);
-	ro = vNorm(r1per);
-	if (ro != 0) vNormalize(r1per);
-	if (ro < dsX/2) ro = dsX/2;
-	s = -temp;
-	arg = e_w_gv1*ro;
-	cik01_(&arg, &t1, &t2, &t3, &t4, &K0, &t5, &K1, &t6);
-	phase = imExp(-e_w_v*s);
-	if (auxiliary) {
-		phase = conj(phase);
-		cvMultScal_RVec(phase*K1,r1per,v1);
-		cvMultScal_RVec((I)*gamma1_inv*phase*K0,dir,v2);
+	for (k=0;k<3;k++) v[k]=auxiliary ? -dir[k] : dir[k];
+	vCopy(v,vim); vim[2]=-v[2];                 // reflected velocity, eq (S62)
+	vCopy(r0,r0im); r0im[2]=-r0[2]-2*hsub;      // reflected origin, eq (S62)
+	ElectronF0(obs,r0,v,f0);
+	if (v[2]!=0) {
+		ElectronF(obs,r0,v,f1);
+		ElectronF(obs,r0im,vim,f2);
+		for (k=0;k<3;k++) out[k]=pref*(f0[k]+rst*(f1[k]+f2[k]));
 	}
-	else {
-		cvMultScal_RVec(-phase*K1,r1per,v1);
-		cvMultScal_RVec((I)*gamma1_inv*phase*K0,dir,v2);
+	else if (r0[2]+hsub>=0) { // parallel beam above the interface, eqs (S92), (S93)
+		ElectronF0(obs,r0im,vim,f2);
+		for (k=0;k<3;k++) out[k]=pref*(f0[k]+rst*f2[k]);
 	}
-	cvAdd(v1,v2,v3);
-	cvMultScal_cmplx(2*e_pref1,v3,out);
-}
-
-static void ElectronFullLineFieldNoFloor(const double obs[static 3],const double center[static 3],const double dir[static 3],
-	const bool auxiliary,doublecomplex out[static 3])
-// corrected exact full infinite trajectory field with only a tiny numerical safeguard; no dX/2 regularization
-{
-	double r1[3],r1par[3],r1per[3];
-	double ro,temp,s;
-	doublecomplex arg,t1,t2,t3,t4,t5,t6,K0,K1,phase;
-	doublecomplex v1[3],v2[3],v3[3];
-	const double tiny = 1e-12*dsX;
-
-	LinComb(obs,center,1,-1,r1);
-	temp = DotProd(r1,dir);
-	vMultScal(temp,dir,r1par);
-	vSubtr(r1,r1par,r1per);
-	ro = vNorm(r1per);
-	if (ro != 0) vNormalize(r1per);
-	if (ro < tiny) ro = tiny;
-	s = -temp;
-	arg = e_w_gv1*ro;
-	cik01_(&arg, &t1, &t2, &t3, &t4, &K0, &t5, &K1, &t6);
-	phase = imExp(-e_w_v*s);
-	if (auxiliary) {
-		phase = conj(phase);
-		cvMultScal_RVec(phase*K1,r1per,v1);
-		cvMultScal_RVec((I)*gamma1_inv*phase*K0,dir,v2);
-	}
-	else {
-		cvMultScal_RVec(-phase*K1,r1per,v1);
-		cvMultScal_RVec((I)*gamma1_inv*phase*K0,dir,v2);
-	}
-	cvAdd(v1,v2,v3);
-	cvMultScal_cmplx(2*e_pref1,v3,out);
-}
-
-static void ElectronBranchPlusRealNoFloor(const double obs[static 3],const double cross[static 3],const double dir[static 3],
-	const double s0,const bool auxiliary,doublecomplex out[static 3])
-// corrected lower real branch: E_+^(r) for incident (auxiliary=false) and auxiliary (auxiliary=true)
-{
-	double r1[3],r1par[3],r1per[3],rhat[3]={0,0,0};
-	double rho,s,temp,R;
-	doublecomplex arg,t1,t2,t3,t4,t5,t6,K0,K1,Omega,incJ0,incJ1,F,K1branch;
-	doublecomplex phase0,phase_line,expikr,A,B;
-	const double k = WaveNum0;
-	const double alpha = e_w_v;
-	const double tol = 1e-8;
-	const double tiny = 1e-12*dsX;
-	doublecomplex core_pref,ep_pref;
-
-	LinComb(obs,cross,1,-1,r1);
-	temp = DotProd(r1,dir);
-	vMultScal(temp,dir,r1par);
-	vSubtr(r1,r1par,r1per);
-	rho = vNorm(r1per);
-	if (rho != 0) { vNormalize(r1per); vCopy(r1per,rhat); }
-	if (rho < tiny) rho = tiny;
-	s = -temp;
-	R = sqrt(rho*rho+s*s);
-	arg = e_w_gv1*rho;
-	cik01_(&arg, &t1, &t2, &t3, &t4, &K0, &t5, &K1, &t6);
-	expikr = imExp(k*R);
-
-	if (auxiliary) {
-		phase0 = imExp(-alpha*s0);
-		phase_line = imExp(alpha*s);
-		Omega = asinh(s/rho) - ArcCoth(beta1);
-		incJ0 = incJ(0,arg,Omega,tol);
-		incJ1 = incJ(1,arg,Omega,tol);
-		F = phase_line*(K0-incJ0);
-		K1branch = phase_line*(K1-incJ1);
-		A = s/(R*R*R)*(1-I*k*R) - I*alpha/R;
-		B = rho/(R*R*R)*(1-I*k*R) + I*alpha*s/(R*rho);
-		core_pref = -e_pref1*phase0;
-		ep_pref = (I)*e_pref1*(beta1*beta1)/gamma1_inv * phase0;
-		cvMultScal_RVec(core_pref*K1branch,rhat,out);
-		doublecomplex tmpv[3],tmp2[3];
-		cvMultScal_RVec(core_pref*(I)*gamma1_inv*F,dir,tmpv);
-		cvAdd(out,tmpv,out);
-		cvMultScal_RVec(ep_pref*expikr*A/(k*k),dir,tmpv);
-		cvMultScal_RVec(-ep_pref*expikr*B/(k*k),rhat,tmp2);
-		cvAdd(out,tmpv,out);
-		cvAdd(out,tmp2,out);
-	}
-	else {
-		phase0 = imExp(alpha*s0);
-		phase_line = imExp(-alpha*s);
-		Omega = asinh(s/rho) + ArcCoth(beta1);
-		incJ0 = incJ(0,arg,Omega,tol);
-		incJ1 = incJ(1,arg,Omega,tol);
-		F = phase_line*(K0-incJ0);
-		K1branch = phase_line*(K1-incJ1);
-		A = s/(R*R*R)*(1-I*k*R) + I*alpha/R;
-		B = rho/(R*R*R)*(1-I*k*R) - I*alpha*s/(R*rho);
-		core_pref = e_pref1*phase0;
-		ep_pref = (I)*e_pref1*(beta1*beta1)/gamma1_inv * phase0;
-		cvMultScal_RVec(core_pref*K1branch,rhat,out);
-		doublecomplex tmpv[3],tmp2[3];
-		cvMultScal_RVec(core_pref*(-I)*gamma1_inv*F,dir,tmpv);
-		cvAdd(out,tmpv,out);
-		cvMultScal_RVec(ep_pref*expikr*A/(k*k),dir,tmpv);
-		cvMultScal_RVec(-ep_pref*expikr*B/(k*k),rhat,tmp2);
-		cvAdd(out,tmpv,out);
-		cvAdd(out,tmp2,out);
-	}
-}
-
-static void ElectronBranchMinusImageNoFloor(const double obs[static 3],const double cross[static 3],const double dir[static 3],
-	const double s0,const bool auxiliary,doublecomplex out[static 3])
-// corrected lower image branch: E_-^(i) for incident (auxiliary=false) and auxiliary (auxiliary=true)
-{
-	double r1[3],r1par[3],r1per[3],rhat[3]={0,0,0};
-	double rho,s,temp,R;
-	doublecomplex arg,t1,t2,t3,t4,t5,t6,K0,K1,Omega,incJ0,incJ1,F,K1branch;
-	doublecomplex phase0,phase_line,expikr,A,B;
-	const double k = WaveNum0;
-	const double alpha = e_w_v;
-	const double tol = 1e-8;
-	const double tiny = 1e-12*dsX;
-	doublecomplex core_pref,ep_pref;
-
-	LinComb(obs,cross,1,-1,r1);
-	temp = DotProd(r1,dir);
-	vMultScal(temp,dir,r1par);
-	vSubtr(r1,r1par,r1per);
-	rho = vNorm(r1per);
-	if (rho != 0) { vNormalize(r1per); vCopy(r1per,rhat); }
-	if (rho < tiny) rho = tiny;
-	s = -temp;
-	R = sqrt(rho*rho+s*s);
-	arg = e_w_gv1*rho;
-	cik01_(&arg, &t1, &t2, &t3, &t4, &K0, &t5, &K1, &t6);
-	expikr = imExp(k*R);
-
-	if (auxiliary) {
-		phase0 = imExp(-alpha*s0);
-		phase_line = imExp(alpha*s);
-		// unstable direct branch would use Omega = -asinh(s/rho) + ArcCoth(beta1)
-		// Evaluate it by the complement identity K_nu(-eta)=2K_nu-K_nu(eta),
-		// with the stable branch eta = asinh(s/rho) - ArcCoth(beta1).
-		Omega = asinh(s/rho) - ArcCoth(beta1);
-		incJ0 = incJ(0,arg,Omega,tol);
-		incJ1 = incJ(1,arg,Omega,tol);
-		F = phase_line*(K0+incJ0);
-		K1branch = phase_line*(K1+incJ1);
-		A = s/(R*R*R)*(1-I*k*R) - I*alpha/R;
-		B = rho/(R*R*R)*(1-I*k*R) + I*alpha*s/(R*rho);
-		core_pref = -e_pref1*phase0;
-		ep_pref = -(I)*e_pref1*(beta1*beta1)/gamma1_inv * phase0;
-		cvMultScal_RVec(core_pref*K1branch,rhat,out);
-		doublecomplex tmpv[3],tmp2[3];
-		cvMultScal_RVec(core_pref*(I)*gamma1_inv*F,dir,tmpv);
-		cvAdd(out,tmpv,out);
-		cvMultScal_RVec(ep_pref*expikr*A/(k*k),dir,tmpv);
-		cvMultScal_RVec(-ep_pref*expikr*B/(k*k),rhat,tmp2);
-		cvAdd(out,tmpv,out);
-		cvAdd(out,tmp2,out);
-	}
-	else {
-		phase0 = imExp(alpha*s0);
-		phase_line = imExp(-alpha*s);
-		// unstable direct branch would use Omega = -asinh(s/rho) - ArcCoth(beta1)
-		// Evaluate it by the complement identity K_nu(-eta)=2K_nu-K_nu(eta),
-		// with the stable branch eta = asinh(s/rho) + ArcCoth(beta1).
-		Omega = asinh(s/rho) + ArcCoth(beta1);
-		incJ0 = incJ(0,arg,Omega,tol);
-		incJ1 = incJ(1,arg,Omega,tol);
-		F = phase_line*(K0+incJ0);
-		K1branch = phase_line*(K1+incJ1);
-		A = s/(R*R*R)*(1-I*k*R) + I*alpha/R;
-		B = rho/(R*R*R)*(1-I*k*R) - I*alpha*s/(R*rho);
-		core_pref = e_pref1*phase0;
-		ep_pref = -(I)*e_pref1*(beta1*beta1)/gamma1_inv * phase0;
-		cvMultScal_RVec(core_pref*K1branch,rhat,out);
-		doublecomplex tmpv[3],tmp2[3];
-		cvMultScal_RVec(core_pref*(-I)*gamma1_inv*F,dir,tmpv);
-		cvAdd(out,tmpv,out);
-		cvMultScal_RVec(ep_pref*expikr*A/(k*k),dir,tmpv);
-		cvMultScal_RVec(-ep_pref*expikr*B/(k*k),rhat,tmp2);
-		cvAdd(out,tmpv,out);
-		cvAdd(out,tmp2,out);
-	}
-}
-
-static bool LineIntersectsDipoleCube(const double line_point[static 3],const double dir[static 3],const double cube_center[static 3],const double half)
-// infinite-line / axis-aligned cube intersection test by slab clipping
-{
-	double tmin = -DBL_MAX, tmax = DBL_MAX;
-	for (int a=0; a<3; ++a) {
-		double p = line_point[a] - cube_center[a];
-		double d = dir[a];
-		if (fabs(d) < 1e-15) {
-			if (fabs(p) > half) return false;
-		}
-		else {
-			double t1 = (-half - p)/d;
-			double t2 = ( half - p)/d;
-			if (t1 > t2) { double tmp=t1; t1=t2; t2=tmp; }
-			if (t1 > tmin) tmin = t1;
-			if (t2 < tmax) tmax = t2;
-			if (tmin > tmax) return false;
-		}
-	}
-	return true;
-}
-
-
-
-
-
-#define EULER_GAMMA_CONST 0.5772156649015328606
-
-static inline doublecomplex K0_asym(const doublecomplex x)
-// K0(x) = L + x^2/4 (1-L) + x^4/128 (3-2L) + O(x^6 L),  L=-ln(x/2)-gamma_E
-{
-	doublecomplex L = -clog(x/2.0)-EULER_GAMMA_CONST;
-	doublecomplex x2 = x*x;
-	return L + 0.25*x2*(1.0-L) + (x2*x2)*(3.0-2.0*L)/128.0;
-}
-
-static inline doublecomplex K1_asym(const doublecomplex x)
-// K1(x) = 1/x - x/2 L - x/4 - x^3/16 L - 5 x^3/64 + O(x^5 L)
-{
-	doublecomplex L = -clog(x/2.0)-EULER_GAMMA_CONST;
-	doublecomplex x2 = x*x;
-	return 1.0/x - 0.5*x*L - 0.25*x - (x*x2)*L/16.0 - 5.0*(x*x2)/64.0;
-}
-
-static inline doublecomplex K0inc_asym(const doublecomplex x,const doublecomplex Omega)
-// K_0(x,Omega)=K0(x)-J0, with J0 expanded through x^3
-{
-	doublecomplex L = -clog(x/2.0)-EULER_GAMMA_CONST;
-	doublecomplex x2 = x*x;
-	doublecomplex s1 = csinh(Omega);
-	doublecomplex s2 = csinh(2.0*Omega);
-	doublecomplex s3 = csinh(3.0*Omega);
-	return (L - Omega)
-		+ x*s1
-		+ x2*( (1.0-L)/4.0 - (2.0*Omega + s2)/8.0 )
-		+ (x*x2)*(s3 + 9.0*s1)/72.0;
-}
-
-static inline doublecomplex K1inc_asym(const doublecomplex x,const doublecomplex Omega)
-// K_1(x,Omega)=K1(x)-J1, with J1 expanded through x^3
-{
-	doublecomplex L = -clog(x/2.0)-EULER_GAMMA_CONST;
-	doublecomplex x2 = x*x;
-	doublecomplex s1 = csinh(Omega);
-	doublecomplex s2 = csinh(2.0*Omega);
-	doublecomplex s4 = csinh(4.0*Omega);
-	doublecomplex c2 = ccosh(Omega)*ccosh(Omega);
-	return 1.0/x
-		- s1
-		+ x*( (2.0*Omega + s2)/4.0 - 0.5*L - 0.25 )
-		- x2*( (c2 + 2.0)*s1 )/6.0
-		+ (x*x2)*( (12.0*Omega + 8.0*s2 + s4)/192.0 - L/16.0 - 5.0/64.0 );
-}
-
-static void ElectronTiltedFieldPointNoFloor(const double obs[static 3],const double beam_center[static 3],
-	const double cross[static 3],const double dir[static 3],const double dir_image[static 3],const double s0,const double s0_image,
-	const doublecomplex refl,const bool auxiliary,doublecomplex out[static 3])
-// re-implemented exact tilted field at one point with only tiny safeguards in constituent kernels; no dX/2 regularization.
-// Sign convention is fixed so that the theta->0 limit reproduces the validated perpendicular implementation:
-// E_tilt = E_full^(r) - r * ( E_+^(r) + E_-^(i) ).
-{
-	doublecomplex vfull_real[3],vplus_real[3],vminus_img[3],tmp[3];
-	ElectronFullLineFieldNoFloor(obs,beam_center,dir,auxiliary,vfull_real);
-	ElectronBranchPlusRealNoFloor(obs,cross,dir,s0,auxiliary,vplus_real);
-	ElectronBranchMinusImageNoFloor(obs,cross,dir_image,s0_image,auxiliary,vminus_img);
-	cvAdd(vplus_real,vminus_img,tmp);
-	cvMultScal_cmplx(-refl,tmp,tmp);
-	cvAdd(vfull_real,tmp,out);
-}
-
-
-
-static double SnapToNearestHalfInteger(const double c)
-// nearest value in Z+1/2
-{
-	return floor(c + 0.5) - 0.5;
-}
-
-
-static inline void Cross3(const double a[static 3],const double b[static 3],double out[static 3])
-{
-	out[0] = a[1]*b[2] - a[2]*b[1];
-	out[1] = a[2]*b[0] - a[0]*b[2];
-	out[2] = a[0]*b[1] - a[1]*b[0];
-}
-
-static inline double NormSq3(const double a[static 3])
-{
-	return a[0]*a[0] + a[1]*a[1] + a[2]*a[2];
-}
-
-static bool BuildTiltedGridRegularizedPoint(const double obs[static 3],const double cross[static 3],const double dir[static 3],
-	double obs_reg[static 3],double *rho_real_out)
-// projected-grid regularization for arbitrary beam direction.
-// For points inside the beam-hit cylinder, project the transverse offset to the nearest admissible
-// face of the projected Wigner-Seitz cell of the cubic lattice. This guarantees the correct dX/2
-// limit in the perpendicular/parallel cases and avoids corner-snapping to dX/sqrt(2).
-{
-	double r1[3],r1par[3],r1per[3],a[3][3],g[6][3],ghat[3],qreg[3],cand[3];
-	double rho_real,temp,gnorm,u,dface,best_dist=DBL_MAX,best_z=-DBL_MAX;
-	int j,k,m; bool found=false;
-	LinComb(obs,cross,1,-1,r1);
-	temp = DotProd(r1,dir);
-	vMultScal(temp,dir,r1par);
-	vSubtr(r1,r1par,r1per);
-	rho_real = vNorm(r1per);
-	if (rho_real_out) *rho_real_out = rho_real;
-	if (rho_real >= dsX/2) return false;
-
-	for (k=0;k<3;k++) {
-		for (j=0;j<3;j++) a[k][j] = -dsX*dir[k]*dir[j];
-		a[k][k] += dsX;
-	}
-	vCopy(a[0],g[0]);
-	vCopy(a[1],g[1]);
-	vCopy(a[2],g[2]);
-	vSubtr(a[0],a[1],g[3]);
-	vSubtr(a[0],a[2],g[4]);
-	vSubtr(a[1],a[2],g[5]);
-
-	for (m=0; m<6; ++m) {
-		gnorm = vNorm(g[m]);
-		if (gnorm < 1e-14*dsX) continue;
-		vMultScal(1.0/gnorm,g[m],ghat);
-		u = DotProd(r1per,ghat);
-		for (int sgn=-1; sgn<=1; sgn+=2) {
-			dface = sgn*0.5*gnorm - u;
-			LinComb(r1per,ghat,1,dface,qreg);
-			LinComb(cross,r1par,1,1,cand);
-			LinComb(cand,qreg,1,1,cand);
-			if (cand[2] + 1e-12 < dsX/2) continue;
-			/* candidate must lie on or inside all projected Wigner-Seitz half-space boundaries */
-			bool inside=true;
-			for (int n=0; n<6; ++n) {
-				double gn2 = NormSq3(g[n]);
-				if (gn2 < 1e-28) continue;
-				if (fabs(DotProd(qreg,g[n])) > 0.5*gn2 + 1e-10*dsX*dsX) { inside=false; break; }
-			}
-			if (!inside) continue;
-			if (!found || fabs(dface) < best_dist - 1e-14 || (fabs(fabs(dface)-best_dist) < 1e-14 && cand[2] > best_z)) {
-				best_dist = fabs(dface);
-				best_z = cand[2];
-				obs_reg[0] = cand[0];
-				obs_reg[1] = cand[1];
-				obs_reg[2] = cand[2];
-				found = true;
-			}
-		}
-	}
-	if (found) return true;
-
-	/* conservative fallback: move along the shortest projected lattice direction by half a step */
-	{
-		int best_m=-1; double best_len=DBL_MAX;
-		for (m=0; m<6; ++m) {
-			gnorm = vNorm(g[m]);
-			if (gnorm > 1e-14*dsX && gnorm < best_len) { best_len=gnorm; best_m=m; }
-		}
-		if (best_m < 0) return false;
-		vMultScal(1.0/best_len,g[best_m],ghat);
-		for (int sgn=-1; sgn<=1; sgn+=2) {
-			LinComb(r1per,ghat,1,sgn*0.5*best_len,qreg);
-			LinComb(cross,r1par,1,1,cand);
-			LinComb(cand,qreg,1,1,cand);
-			if (cand[2] >= dsX/2 - 1e-12) { vCopy(cand,obs_reg); return true; }
-		}
-		vCopy(obs,obs_reg);
-		if (obs_reg[2] < dsX/2) obs_reg[2] = dsX/2;
-		return true;
-	}
-}
-
-
-static void ElectronPerpendicularSurfaceField(const double obs[static 3],const double beam_center[static 3],
-	const double hsub,const bool auxiliary,doublecomplex out[static 3])
-// validated perpendicular -surf field used as regularized fallback inside the near-hit cylinder of the tilted branch
-{
-	double r1[3],ro,z,z0,R1;
-	doublecomplex e_wb_gv,t1,t2,t3,t4,t5,t6,K0,K1,omp,omm,incJ0p,incJ0m,incJ1p,incJ1m;
-	doublecomplex phase_z0,phase_med,expikr,med_xy,med_z,sub_pref,sub_xy,sub_z,phase_a;
-
-	LinComb(obs,beam_center,1,-1,r1);
-	ro = sqrt(r1[0]*r1[0]+r1[1]*r1[1]);
-	z = obs[2] + hsub;
-	if (ro < dsX/2) ro = dsX/2;
-	z0 = beam_center[2] + hsub;
-	e_wb_gv = e_w_gv1*ro;
-	cik01_(&e_wb_gv, &t1, &t2, &t3, &t4, &K0, &t5, &K1, &t6);
-	t4 = imExp(e_w_v*z);
-	phase_z0 = imExp(e_w_v*z0);
-	phase_med = conj(t4)*phase_z0;
-	omp = asinh(z/ro)+ArcCoth(beta1);
-	omm = asinh(z/ro)-ArcCoth(beta1);
-	incJ0p = incJ(0,e_wb_gv,omp,1e-8);
-	incJ0m = incJ(0,e_wb_gv,omm,1e-8);
-	incJ1p = incJ(1,e_wb_gv,omp,1e-8);
-	incJ1m = incJ(1,e_wb_gv,omm,1e-8);
-	R1 = 1/sqrt(ro*ro+z*z);
-	doublecomplex K1p = conj(t4)*(K1-incJ1p), K1m = t4*(K1-incJ1m), K0p = conj(t4)*(K0-incJ0p), K0m = t4*(K0-incJ0m);
-	expikr = imExp(WaveNum0*sqrt(ro*ro+z*z));
-	med_xy = -2*e_pref1*phase_med*K1;
-	med_z = (-I)*gamma1_inv*2*e_pref1*phase_med*K0;
-	sub_pref = -e_pref1*((eps1-eps2)/(eps1+eps2))*phase_z0;
-	sub_xy = sub_pref*(K1p+K1m-2*z*R1/e_wb_gv*expikr);
-	sub_z = sub_pref*(I*gamma1_inv*(K0p-K0m)+2*R1/e_w_gv1*expikr);
-	if (!auxiliary) {
-		out[0] = (r1[0]/ro)*(med_xy+sub_xy);
-		out[1] = (r1[1]/ro)*(med_xy+sub_xy);
-		out[2] = med_z+sub_z;
-	}
-	else {
-		phase_a = imExp(2*e_w_v*(z-z0));
-		doublecomplex Einc_sub[3]={(r1[0]/ro)*sub_xy,(r1[1]/ro)*sub_xy,sub_z};
-		out[0] = -phase_a*(r1[0]/ro)*med_xy;
-		out[1] = -phase_a*(r1[1]/ro)*med_xy;
-		out[2] = phase_a*med_z;
-		doublecomplex suba[3];
-		cvMultScal_cmplx(-imExp(-2*e_w_v*z0),Einc_sub,suba);
-		cvAdd(out,suba,out);
-	}
+	else for (k=0;k<3;k++) out[k]=pref*(1+rst)*f0[k]; // parallel beam inside the substrate: t_st, eq (S4)
 }
 
 //======================================================================================================================
@@ -694,6 +333,7 @@ void InitBeam(void)
 				//printf("vgw2\t=\t"CFORM"\n",REIM(vgw2));
 				eps1 = mhost*mhost;
 				eps2 = msub*msub;
+				e_w = ArcCoth(beta1);
 				//printf("msub\t=\t"CFORM"\n",REIM(msub));
 			}
 			if (IFROOT) beam_descr=dyn_sprintf("The electron with the %g keV energy moving through "GFORM3V,e_energy,COMP3V(beam_center_0));
@@ -1065,15 +705,6 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 		//new code
 		case B_ELECTRON:
 			if(!surface) hsub = 0;
-			cvMultScal_cmplx(1,beam_center,beam_center_proj);
-			if(fabs(prop[2]) > DBL_EPSILON){ //For tilted beam: projection of beam center on z=-hsub
-				if(fabs(prop[0]) > DBL_EPSILON) beam_center_proj[0] = -(prop[0]/prop[2])*(beam_center[2]+hsub) + beam_center[0];
-				if(fabs(prop[1]) > DBL_EPSILON) beam_center_proj[1] = -(prop[1]/prop[2])*(beam_center[2]+hsub) + beam_center[1];
-				beam_center_proj[2] = -hsub;
-				printf("Beam center = (%g %g %g)\n",beam_center[0],beam_center[1],beam_center[2]);
-				printf("Beam center proj = (%g %g %g)\n",beam_center_proj[0],beam_center_proj[1],beam_center_proj[2]);
-				//LogError(ONE_POS,"STOP");
-			}
 
 			for (i=0;i<local_nvoid_Ndip;i++) {
 				j=3*i;
@@ -1105,196 +736,9 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 					cvMultScal_cmplx(1,Einc_charge,b+j); //E_inc
 					cvMultScal_cmplx(1,Ea_charge,E1+j); //E_a
 				}
-				else { //substrate
-					if(fabs(prop[2]) < 2e-3) { //beam parallel or numerically near-parallel to the surface
-						if(beam_center[2] >= -hsub) { //beam above the surface
-							//charge
-							LinComb(DipoleCoord+j,beam_center,1,-1,r1); // set relative coordinates (in beam's coordinate system)
-							temp = DotProd(r1,prop);
-							vMultScal(temp,prop,r1par);
-							vSubtr(r1,r1par,r1per);
-							ro = vNorm(r1per);
-							z = temp;
-							if(ro != 0) vNormalize(r1per);
-							if(ro < dsX) ro = dsX;
-							e_wb_gv = e_w_gv1*ro;
-							cik01_(&e_wb_gv, &t1, &t2, &t3, &t4, &t7, &t5, &t8, &t6);
-
-							t4 = imExp(e_w_v*z);
-							cvMultScal_RVec(t4*t8,r1per,v1);
-							cvMultScal_RVec((-I)*gamma1_inv*t4*t7,prop,v2);
-							cvAdd(v1,v2,v3);
-							cvMultScal_cmplx(2*e_pref1,v3,Einc_charge); //Einc from the charge
-
-							t4 = conj(t4);
-							cvMultScal_RVec(-t4*t8,r1per,v1);
-							cvMultScal_RVec((-I)*gamma1_inv*t4*t7,prop,v2);
-							cvAdd(v1,v2,v3);
-							cvMultScal_cmplx(2*e_pref1,v3,Ea_charge); //Ea from the charge
-
-
-							//image charge
-							cvMultScal_cmplx(1,beam_center,beam_center_image);
-							beam_center_image[2] = -beam_center[2]-2*hsub;
-
-							LinComb(DipoleCoord+j,beam_center_image,1,-1,r1); // set relative coordinates (in beam's coordinate system)
-							temp = DotProd(r1,prop);
-							vMultScal(temp,prop,r1par);
-							vSubtr(r1,r1par,r1per);
-							ro = vNorm(r1per);
-							z = temp;
-							if(ro != 0) vNormalize(r1per);
-							if(ro < dsX) ro = dsX;
-							e_wb_gv = e_w_gv1*ro;
-							cik01_(&e_wb_gv, &t1, &t2, &t3, &t4, &t7, &t5, &t8, &t6);
-
-							t4 = imExp(e_w_v*z);
-							cvMultScal_RVec(t4*t8,r1per,v1);
-							cvMultScal_RVec((-I)*gamma1_inv*t4*t7,prop,v2);
-							cvAdd(v1,v2,v3);
-							cvMultScal_cmplx(((eps1-eps2)/(eps1+eps2))*2*e_pref1,v3,Einc_image); //Einc from the image
-
-							t4 = conj(t4);
-							cvMultScal_RVec(-t4*t8,r1per,v1);
-							cvMultScal_RVec((-I)*gamma1_inv*t4*t7,prop,v2);
-							cvAdd(v1,v2,v3);
-							cvMultScal_cmplx(((eps1-eps2)/(eps1+eps2))*2*e_pref1,v3,Ea_image); //Ea from the image
-
-							cvAdd(Einc_charge,Einc_image,b+j);
-							cvAdd(Ea_charge,Ea_image,E1+j);
-						}
-						else { //beam below the surface
-							LinComb(DipoleCoord+j,beam_center,1,-1,r1); // set relative coordinates (in beam's coordinate system)
-							temp = DotProd(r1,prop);
-							vMultScal(temp,prop,r1par);
-							vSubtr(r1,r1par,r1per);
-							ro = vNorm(r1per);
-							z = temp;
-							if(ro != 0) vNormalize(r1per);
-							if(ro < dsX) ro = dsX;
-							e_wb_gv = e_w_gv1*ro;
-							cik01_(&e_wb_gv, &t1, &t2, &t3, &t4, &t7, &t5, &t8, &t6);
-
-							t4 = imExp(e_w_v*z);
-							cvMultScal_RVec(t4*t8,r1per,v1);
-							cvMultScal_RVec((-I)*gamma1_inv*t4*t7,prop,v2);
-							cvAdd(v1,v2,v3);
-							cvMultScal_cmplx(2*e_pref1,v3,Einc_charge); //Einc from the charge
-
-							t4 = conj(t4);
-							cvMultScal_RVec(-t4*t8,r1per,v1);
-							cvMultScal_RVec((-I)*gamma1_inv*t4*t7,prop,v2);
-							cvAdd(v1,v2,v3);
-							cvMultScal_cmplx(2*e_pref1,v3,Ea_charge); //Ea from the charge
-
-							cvMultScal_cmplx(2*eps1/(eps1+eps2),Einc_charge,b+j); //E_inc
-							cvMultScal_cmplx(2*eps1/(eps1+eps2),Ea_charge,E1+j); //E_a
-						}
-					}
-
-
-					//else if(prop[0] < DBL_EPSILON && prop[1] < DBL_EPSILON) { //perpendicular to the substrate
-					else if(fabs(prop[0]) < DBL_EPSILON && fabs(prop[1]) < DBL_EPSILON && prop[2] == -1) { //perpendicular to the substrate
-						//LogError(ONE_POS,"old");
-						//printf("--- j = %i\n",j);
-						//printf("prop\t=\t%g %g %g\n",prop[0],prop[1],prop[2]);
-
-						LinComb(DipoleCoord+j,beam_center,1,-1,r1);
-
-						ro = sqrt(r1[0]*r1[0]+r1[1]*r1[1]);
-						z = (DipoleCoord+j)[2] + hsub;
-						if(ro < dsX/2) ro = dsX/2;
-						//printf("b = %lf\n",ro);
-						//printf("z = %lf\n",z);
-						if(ro == 0) LogError(ONE_POS,"electron hit a dipole, this is currently not supported, ro = "EFORM, ro);
-						z0 = beam_center[2] + hsub;
-						e_wb_gv = e_w_gv1*ro;
-						cik01_(&e_wb_gv, &t1, &t2, &t3, &t4, &K0, &t5, &K1, &t6);
-						//printf("e_wb_gv\t=\t"CFORM"\n",REIM(e_wb_gv));
-						//printf("K0\t=\t"CFORM"\n",REIM(K0));
-						//printf("K1\t=\t"CFORM"\n",REIM(K1));
-
-						/* Simplified expressions from Eqs. (53), (54), and (56) of the thesis.
-						 * They are algebraically equivalent to the older implementation above, but avoid
-						 * explicit h_z/h_zz/h_zx combinations. */
-						t4 = imExp(e_w_v*z);    // exp(i*omega*z/v)
-						phase_z0 = imExp(e_w_v*z0); // exp(i*omega*z0/v)
-						phase_med = conj(t4)*phase_z0; // exp(-i*omega*(z-z0)/v)
-						omp = asinh(z/ro)+ArcCoth(beta1);
-						omm = asinh(z/ro)-ArcCoth(beta1);
-
-						tol = 1e-4; // precision for incomplete Bessel functions
-						incJ0p = incJ(0,e_wb_gv,omp,tol);
-						incJ0m = incJ(0,e_wb_gv,omm,tol);
-						incJ1p = incJ(1,e_wb_gv,omp,tol);
-						incJ1m = incJ(1,e_wb_gv,omm,tol);
-
-						R1 = 1/sqrt(ro*ro+z*z); // 1/r_tilde
-						K1p = conj(t4)*(K1-incJ1p); // K_1^+
-						K1m = t4*(K1-incJ1m);       // K_1^-
-						K0p = conj(t4)*(K0-incJ0p); // K_0^+
-						K0m = t4*(K0-incJ0m);       // K_0^-
-						expikr = imExp(WaveNum0*sqrt(ro*ro+z*z)); // exp(i*k*r_tilde); direct form avoids ArcCoth/ccosh branch issues
-
-						med_xy = -2*e_pref1*phase_med*K1;
-						med_z = (-I)*gamma1_inv*2*e_pref1*phase_med*K0;
-						sub_pref = -e_pref1*((eps1-eps2)/(eps1+eps2))*phase_z0;
-						sub_xy = sub_pref*(K1p+K1m-2*z*R1/e_wb_gv*expikr);
-						sub_z = sub_pref*(I*gamma1_inv*(K0p-K0m)+2*R1/e_w_gv1*expikr);
-
-						Einc_charge[0] = (r1[0]/ro)*med_xy;
-						Einc_charge[1] = (r1[1]/ro)*med_xy;
-						Einc_charge[2] = med_z;
-						Einc_image[0] = (r1[0]/ro)*sub_xy;
-						Einc_image[1] = (r1[1]/ro)*sub_xy;
-						Einc_image[2] = sub_z;
-						cvAdd(Einc_charge,Einc_image,b+j);
-
-						phase_a = imExp(2*e_w_v*(z-z0));
-						Ea_charge[0] = -phase_a*Einc_charge[0];
-						Ea_charge[1] = -phase_a*Einc_charge[1];
-						Ea_charge[2] = phase_a*Einc_charge[2];
-						cvMultScal_cmplx(-imExp(-2*e_w_v*z0),Einc_image,Ea_image);
-						cvAdd(Ea_charge,Ea_image,E1+j);
-					}
-
-					else { //tilted
-						doublecomplex refl;
-						double rho_real,temp_real,scale_core;
-						double core_obs[3];
-						if(prop[2] > 0) LogError(ONE_POS,"Beam propagating from below the substrate is currently not supported");
-
-						// reflected trajectory used for R_img term
-						cvMultScal_cmplx(1,beam_center,beam_center_image);
-						beam_center_image[2] = -beam_center[2]-2*hsub;
-						vCopy(prop,prop_image);
-						prop_image[2] = -prop[2];
-						refl = (eps1-eps2)/(eps1+eps2);
-
-						// distance from beam center to the interface crossing along uhat=-prop
-						LinComb(beam_center,beam_center_proj,1,-1,r1);
-						s0 = -DotProd(r1,prop);
-						LinComb(beam_center_image,beam_center_proj,1,-1,r1);
-						z0 = -DotProd(r1,prop_image); // reuse z0 as s0 for image frame
-
-						// real-beam distance and line/cube intersection decide whether we regularize the singular real core
-						LinComb(DipoleCoord+j,beam_center_proj,1,-1,r1);
-						temp_real = DotProd(r1,prop);
-						vMultScal(temp_real,prop,r1par);
-						vSubtr(r1,r1par,r1per);
-						rho_real = vNorm(r1per);
-
-						if (tilted_regularization_enabled && BuildTiltedGridRegularizedPoint(DipoleCoord+j,beam_center_proj,prop,core_obs,&rho_real)) {
-							// projected-grid regularization of the whole exact tilted field inside the beam-hit cylinder
-							ElectronTiltedFieldPointNoFloor(core_obs,beam_center,beam_center_proj,prop,prop_image,s0,z0,refl,false,b+j);
-							ElectronTiltedFieldPointNoFloor(core_obs,beam_center,beam_center_proj,prop,prop_image,s0,z0,refl,true,E1+j);
-						}
-						else {
-							// exact tilted field outside the regularized beam-hit cylinder (or for unsupported out-of-plane tilt)
-							ElectronTiltedFieldPointNoFloor(DipoleCoord+j,beam_center,beam_center_proj,prop,prop_image,s0,z0,refl,false,b+j);
-							ElectronTiltedFieldPointNoFloor(DipoleCoord+j,beam_center,beam_center_proj,prop,prop_image,s0,z0,refl,true,E1+j);
-						}
-					}
+				else { // substrate: eqs (S82), (S84) of the SI; parallel beam - eqs (S92), (S93)
+					ElectronSubstrateField(DipoleCoord+j,beam_center,prop,false,b+j);
+					ElectronSubstrateField(DipoleCoord+j,beam_center,prop,true,E1+j);
 				}
 			}
 			return;
