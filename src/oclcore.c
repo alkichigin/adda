@@ -12,11 +12,11 @@
  * You should have received a copy of the GNU General Public License along with ADDA. If not, see
  * <http://www.gnu.org/licenses/>.
  */
-
-/* This file should be compiled only in OpenCL mode, hence the following declaration is redundant. However, it helps
- * proper syntax checking in IDE, such as Eclipse.
+/* The following tests for compilation inconsistencies, but also helps proper syntax checking in IDE, such as Eclipse.
+ * Otherwise, a lot of unresolved-symbol errors are produced, when another build configuration is selected.
  */
 #ifndef OPENCL
+#  error "This file requires OPENCL to be defined"
 #  define OPENCL
 #endif
 
@@ -28,6 +28,7 @@
 #include "memory.h"
 #include "vars.h"
 // system headers
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -400,6 +401,7 @@ void oclinit(void)
 	fseek(file,0,SEEK_SET);
 	MALLOC_VECTOR(cSourceString,char,sourceStrSize+1,ALL);
 	fread(cSourceString,sourceStrSize,1,file);
+	cSourceString[sourceStrSize]='\0'; // ensure that the string is zero-terminated
 	fclose(file);
 	cssPtr[0]=(const char *)cSourceString;
 #else

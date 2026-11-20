@@ -72,7 +72,7 @@ doublecomplex * restrict Avecbuffer; // used to hold the result of matrix-vector
 doublecomplex * restrict vec1,* restrict vec2,* restrict vec3,* restrict vec4;
 // used in matvec.c
 #ifdef SPARSE
-doublecomplex * restrict arg_full; // vector to hold argvec for all dipoles
+doublecomplex * restrict arg_full; // vector to hold argvec for all voxels
 #endif
 
 // LOCAL VARIABLES
@@ -472,7 +472,7 @@ static void CoupleConstant(doublecomplex *mrel,const enum incpol which,doublecom
 				//see B.T. Draine 'Propagation of Electromagnetic Waves on a Rectangular Lattice of Polarizable Points'
 				// Eq number noted for some lines of code
 				res[i]=3*(mrel[0]*mrel[0]-1)/(mrel[0]*mrel[0]+2); // CM
-				// Eq.(55), corrected value CM for rectangular dipole
+				// Eq.(55), corrected value CM for rectangular voxel
 				res[i]=res[i]/(1+res[i]*draine_precalc_data_array[draine_precalc_data_index].R0[i]);
 				res[i]*=dipvol/FOUR_PI;
 				if (PolRelation==POL_CLDR) {
@@ -480,13 +480,13 @@ static void CoupleConstant(doublecomplex *mrel,const enum incpol which,doublecom
 					for (l=0; l < 3; l++)
 						draineSum+=prop[l]*prop[l]*draine_precalc_data_array[draine_precalc_data_index].R3[R3_INDEX(i,l)];
 
-					// L is obtaned in Eq.(62)
+					// L is obtained in Eq.(62)
 					L=c1+mrel[0]*mrel[0]*c2*(1-3*prop[i]*prop[i])-mrel[0]*mrel[0]*c3*prop[i]*prop[i]-FOUR_PI*PI*I*nu/3-
 					  draine_precalc_data_array[draine_precalc_data_index].R1-
 					  (mrel[0]*mrel[0]-1)*draine_precalc_data_array[draine_precalc_data_index].R2[i]-
 					  8*mrel[0]*mrel[0]*prop[i]*prop[i]*
 					  draine_precalc_data_array[draine_precalc_data_index].R3[R3_INDEX(i,i)]+4*mrel[0]*mrel[0]*draineSum;
-					// K is obtaned in Eq.(63)
+					// K is obtained in Eq.(63)
 					K=c3+draine_precalc_data_array[draine_precalc_data_index].R1-
 					  4*draine_precalc_data_array[draine_precalc_data_index].R2[i]+
 					  8*draine_precalc_data_array[draine_precalc_data_index].R3[R3_INDEX(i,i)];
@@ -527,7 +527,7 @@ static void CoupleConstant(doublecomplex *mrel,const enum incpol which,doublecom
 					res[i]=polMplusRR(2*ONE_THIRD*kd2*(2+kd*INV_PI*log((PI-kd)/(PI+kd))),mrel[i]); //One day we'll make it compatible with complex mhost, but now it is not
 					break;
 				case POL_IGT_SO: res[i]=polMplusRR(SO_B1*kd2,mrel[i]); break;
-				case POL_LAK: // M=(8pi/3)[(1-ika)exp(ika)-1], a - radius of volume-equivalent (to cubical dipole) sphere
+				case POL_LAK: // M=(8pi/3)[(1-ika)exp(ika)-1], a - radius of volume-equivalent (to a cube) sphere
 					ka=LAK_C*kd;
 					res[i]=polM(2*FOUR_PI_OVER_THREE*((1-I*ka)*imExp(ka)-1),mrel[i]);
 					break;
@@ -543,8 +543,8 @@ static void CoupleConstant(doublecomplex *mrel,const enum incpol which,doublecom
 				case POL_NLOC: // !!! additionally dynamic part should be added (if needed)
 					/* Here the polarizability is derived from the condition that V_d*sum(G_h(ri))=-4pi/3, where sum is
 					 * taken over the whole lattice. Then M=4pi/3+V_d*Gh(0)=V_d*sum(G_h(ri),i!=0)
-					 * Moreover, the regular part (in limit Rp->0) of Green's tensor automatically sums to zero, so only the
-					 * irregular part need to be considered -h(r)*4pi/3, where h(r) is a normalized Gaussian
+					 * Moreover, the regular part (in limit Rp->0) of Green's tensor automatically sums to zero, so only
+					 * the irregular part need to be considered -h(r)*4pi/3, where h(r) is a normalized Gaussian
 					 */
 					if (polNlocRp==0) res[i]=polCM(mrel[i]);
 					else res[i]=polM(FOUR_PI_OVER_THREE*ellTheta(SQRT1_2PI*gridspace/polNlocRp),mrel[i]);
@@ -840,8 +840,12 @@ static void AllocateEverything(void)
 	 *          more exactly: gridX*gridY*gridZ*(36+48nprocs/boxX [+24/nprocs]) value in [] is only for parallel mode.
 	 * For surf additionally: gridX*gridY*gridZ*(48+48nprocs/boxX)
 	 * 			+ for Sommerfeld table: 128*boxZ*(boxX*boxY-(MIN(boxX,boxY))^2/2)
-	 *    For OpenCL mode all MatVec part is allocated on GPU instead of main (CPU) memory (+ a few additional vectors).
-	 *    However, OpenCL may additionally use up to 96*min(32,gridX)*gridY*gridZ if available.
+	 *    For OpenCL mode all MatVec part is allocated on GPU instead of main (CPU) memory (+ a few additional vectors)
+	 *    However, the CPU memory is not decreased accordingly. Due to FFT calculation of the Dmatrix on the CPU, the
+	 *    peak memory is the larger of the "others" below or (224+128/boxX)*Ndip + (31[+8])*nvoid_Ndip, where +8 is for
+	 *    two iterative solvers below.
+	 *    OpenCL+surf will require CPU memory of (224+128/boxX)*Ndip + (31[+8])*nvoid_Ndip + Sommerfeld table (above)
+	 *    Moreover, OpenCL may additionally use up to 96*min(32,gridX)*gridY*gridZ on the GPU if available.
 	 * others - nvoid_Ndip*{271(CGNR,BiCG), 367(CSYM,QMR2), 415(BiCGStab,QMR), or 463(BCGS2)}
 	 *          + additional 8*nvoid_Ndip for OpenCL mode and CGNR or Bi-CGSTAB
 	 * PARALLEL: above is total; division over processors of MatVec is uniform, others - according to local_nvoid_Ndip

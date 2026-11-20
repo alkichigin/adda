@@ -183,7 +183,7 @@ static const char *Print_clBLAS_Errstring(clblasStatus err)
 
 static void Check_clBLAS_Err(const clblasStatus err,ERR_LOC_DECL)
 /* Checks error code for clBLAS calls and prints error if necessary. First searches among clBLAS specific errors. If not
- * found, uses general error processing for CL calls (since clBLAS error codes can take standard cl values as well).
+ * found, uses general error processing for CL calls (since clBLAS error codes can take standard CL values as well).
  */
 {
 	if (err != clblasSuccess) {
@@ -308,25 +308,29 @@ static void LoadIterChpoint(void)
 	TIME_TYPE tstart;
 
 	tstart=GET_TIME();
-	// open input file; reading errors are checked only for vectors
+	// open input file
 	SnprintfErr(ALL_POS,fname,MAX_FNAME,"%s/"F_CHP,chp_dir,ringid);
 	chp_file=FOpenErr(fname,"rb",ALL_POS);
 	/* check for consistency. This implies that the same index corresponds to the same iterative solver in list params.
 	 * So if the ADDA executable was changed, e.g. by adding a new iterative solver, between writing and reading
 	 * checkpoint, this test may fail.
 	 */
-	fread(&ind_m_new,sizeof(int),1,chp_file);
+	if (fread(&ind_m_new,sizeof(int),1,chp_file)!=1)
+		LogError(ALL_POS,"Failed reading from file '%s'",fname);
 	if (ind_m_new!=ind_m) LogError(ALL_POS,"File '%s' is for different iterative method",fname);
-	fread(&local_nRows_new,sizeof(size_t),1,chp_file);
+	if (fread(&local_nRows_new,sizeof(size_t),1,chp_file)!=1)
+		LogError(ALL_POS,"Failed reading from file '%s'",fname);
 	if (local_nRows_new!=local_nRows) LogError(ALL_POS,"File '%s' is for different vector size",fname);
 	// read common scalars
-	fread(&niter,sizeof(int),1,chp_file);
-	fread(&counter,sizeof(int),1,chp_file);
-	fread(&inprodR,sizeof(double),1,chp_file);
-	fread(&prev_err,sizeof(double),1,chp_file); // read on ALL processors but used only on root
-	fread(&resid_scale,sizeof(double),1,chp_file);
+	if (fread(&niter,sizeof(int),1,chp_file)!=1) LogError(ALL_POS,"Failed reading from file '%s'",fname);
+	if (fread(&counter,sizeof(int),1,chp_file)!=1) LogError(ALL_POS,"Failed reading from file '%s'",fname);
+	if (fread(&inprodR,sizeof(double),1,chp_file)!=1) LogError(ALL_POS,"Failed reading from file '%s'",fname);
+	// read on ALL processors but used only on root
+	if (fread(&prev_err,sizeof(double),1,chp_file)!=1) LogError(ALL_POS,"Failed reading from file '%s'",fname);
+	if (fread(&resid_scale,sizeof(double),1,chp_file)!=1) LogError(ALL_POS,"Failed reading from file '%s'",fname);
 	// read specific scalars
-	for (i=0;i<params[ind_m].sc_N;i++) fread(scalars[i].ptr,scalars[i].size,1,chp_file);
+	for (i=0;i<params[ind_m].sc_N;i++) if (fread(scalars[i].ptr,scalars[i].size,1,chp_file)!=1)
+		LogError(ALL_POS,"Failed reading from file '%s'",fname);
 	// read common vectors
 	if (fread(xvec,sizeof(doublecomplex),local_nRows,chp_file)!=local_nRows)
 		LogError(ALL_POS,"Failed reading from file '%s'",fname);
@@ -582,6 +586,11 @@ ITER_FUNC(BiCG_CS)
  * it is also identical to COCG, described in:
  * van der Vorst H.A., Melissen J.B.M. "A Petrov-Galerkin type method for solving Ax=b, where A is symmetric complex",
  * IEEE Transactions on Magnetics, 26(2):706-708, 1990.
+ * 
+ * Notation that is used here actually corresponds to Figure 2.7 of Barrett et al. "Templates for the Solution of Linear
+ * Systems: Building Blocks for Iterative Methods", 2nd ed., SIAM, 1994. http://www.netlib.org/templates/templates.pdf
+ * after removing the second path with transposed matrix (the description in the book is for general matrix).
+ * TODO: change the notation to that of Freund (similar to QMR).
  */
 {
 #define EPS1 1E-10 // for (rT.r)/(r.r)
@@ -602,9 +611,11 @@ ITER_FUNC(BiCG_CS)
 			scalars[0].ptr=&ro_old;
 			scalars[0].size=sizeof(doublecomplex);
 			return;
-		case PHASE_INIT:
+		case PHASE_INIT: {
 #ifdef OCL_BLAS
-			; // This initialization part need to be moved somewhere during further adoption of clBLAS
+			/* This initialization part need to be moved somewhere during further adoption of clBLAS
+			 * For now, we use braces around this case to allow internal variable declaration
+			 */
 			cl_uint major,minor,patch;
 			CLBLAS_CH_ERR(clblasGetVersion(&major,&minor,&patch));
 			if (!GREATER_EQ2(major,minor,CLBLAS_VER_REQ,CLBLAS_SUBVER_REQ)) LogError(ONE_POS,
@@ -620,7 +631,8 @@ ITER_FUNC(BiCG_CS)
 			CL_CH_ERR(clEnqueueWriteBuffer(command_queue,bufxvec,CL_FALSE,0,sizeof(doublecomplex)*local_nRows,xvec,0,
 				NULL,NULL));
 #endif
-			return; // no specific initialization required
+			return; // no specific initialization required (if not OCL_BLAS)
+		}
 		case PHASE_ITER:
 #ifdef OCL_BLAS
 			/* TODO: Initialization of this two and one other scalar buffers (and then their release) happens at each
@@ -688,11 +700,20 @@ ITER_FUNC(BiCG_CS)
 			temp=-alpha;
 #ifdef OCL_BLAS
 			cl_double2 cltemp = {.s={creal(temp),cimag(temp)}};
-			CREATE_CL_BUFFER(bufinprodRp1,CL_MEM_READ_WRITE,sizeof(double),NULL);
+			CREATE_CL_BUFFER(bufinprodRp1,CL_MEM_READ_WRITE,2*sizeof(double),NULL); // 2 due to workaround below
 			CLBLAS_CH_ERR(clblasZaxpy(local_nRows,cltemp,bufAvecbuffer,0,1,bufrvec,0,1,1,&command_queue,0,NULL,NULL));
-			CLBLAS_CH_ERR(clblasDznrm2(local_nRows,bufinprodRp1,0,bufrvec,0,1,buftmp,1,&command_queue,0,NULL,NULL));
+			/* kernel for function clblasDznrm2 fails to compile (during ADDA execution) with modern OpenCL
+			 * implementations, since the latter strictly impose conformance to the standard. Since, the compilation
+			 * options for these kernels are not accessible, here we use a workaround through the complex dot-product
+			 * function. This workaround requires twice larger memory for result, but twice smaller for buftmp, and
+			 * returns the square of the norm.
+			 * TODO: Since the clBlas is no more developed, this will stay here until we switch to some other library.
+			 * The commented out parts will then facilitate reverting to calling a norm function.
+			 */
+			//CLBLAS_CH_ERR(clblasDznrm2(local_nRows,bufinprodRp1,0,bufrvec,0,1,buftmp,1,&command_queue,0,NULL,NULL));
+			CLBLAS_CH_ERR(clblasZdotc(local_nRows,bufinprodRp1,0,bufrvec,0,1,bufrvec,0,1,buftmp,1,&command_queue,0,NULL,NULL));
 			CL_CH_ERR(clEnqueueReadBuffer(command_queue,bufinprodRp1,CL_TRUE,0,sizeof(double),&inprodRp1,0,NULL,NULL));
-			inprodRp1=inprodRp1*inprodRp1;
+			//inprodRp1=inprodRp1*inprodRp1; // dot product returns already squared norm
 #else
 			nIncrem01_cmplx(rvec,Avecbuffer,temp,&inprodRp1,&Timing_OneIterComm);
 #endif
@@ -723,8 +744,8 @@ ITER_FUNC(BiCG_CS)
 
 ITER_FUNC(BiCGStab)
 /* Bi-Conjugate Gradient Stabilized, based on
- * "Templates for the Solution of Linear Systems: Building Blocks for Iterative Methods",
- * http://www.netlib.org/templates/Templates.html .
+ * Barrett et al. "Templates for the Solution of Linear Systems: Building Blocks for Iterative Methods", 2nd ed.,
+ * SIAM, 1994. http://www.netlib.org/templates/templates.pdf
  */
 {
 #define EPS1 1E-10 // for 1/|beta|
@@ -813,8 +834,8 @@ ITER_FUNC(BiCGStab)
 
 ITER_FUNC(CGNR)
 /* Conjugate Gradient applied to Normalized Equations with minimization of Residual Norm, based on
- * "Templates for the Solution of Linear Systems: Building Blocks for Iterative Methods",
- * http://www.netlib.org/templates/Templates.html .
+ * Barrett et al. "Templates for the Solution of Linear Systems: Building Blocks for Iterative Methods", 2nd ed.,
+ * SIAM, 1994. http://www.netlib.org/templates/templates.pdf
  */
 {
 	static double alpha, denumeratorAlpha;
@@ -1340,7 +1361,7 @@ static void CalcFieldWKB(doublecomplex * restrict Efield)
 #ifdef PARALLEL
 	doublecomplex *bottom; // value of arg at bottom of current processor
 #endif
-	doublecomplex *top; // propagating value of arg at planes between the dipoles
+	doublecomplex *top; // propagating value of arg at planes between the voxels
 
 #ifdef OPENCL // Xmatrix is not used in OpenCL, hence a complicated logic to save memory if possible
 	bool a_arg=false;
@@ -1378,12 +1399,12 @@ static void CalcFieldWKB(doublecomplex * restrict Efield)
 	// calculate function of refractive index
 	for (i=0;i<Nmat;i++) vals[i]=I*(ref_index[i]-1)*kdZ/2;
 	vals[Nmat]=0;
-	// calculate values of mat (the same algorithm as in matvec), for void dipoles mat=Nmat
+	// calculate values of mat (the same algorithm as in matvec), for void voxels mat=Nmat
 	for (dip=0;dip<local_Ndip;dip++) mat[dip]=(unsigned char)Nmat;
 	for (dip=0,ind=0;dip<local_nvoid_Ndip;dip++,ind+=3) mat[INDEX_GRID(ind)]=material[dip];
 	/* main part responsible for calculation of arg; arg[i,j,k+1]=arg[i,j,k]+vals[i,j,k]+vals[i,j,k+1]
 	 * but that is done with temporary variables (not to index both k and k+1 simultaneously
-	 * 'ind' traverses one slice, and 'dip' - all dipoles
+	 * 'ind' traverses one slice, and 'dip' - all dipoles (voxels)
 	 */
 	// First, calculate shifts relative to the bottom of current processor
 	for(ind=0;ind<boxXY;ind++) top[ind]=0;
@@ -1398,7 +1419,7 @@ static void CalcFieldWKB(doublecomplex * restrict Efield)
 		for(k=local_z0,dip_sl=0;k<local_z1_coer;k++,dip_sl+=boxXY) for(ind=0,dip=dip_sl;ind<boxXY;ind++,dip++)
 			arg[dip]+=bottom[ind];
 #endif
-	// E=Einc*Exp(arg), but arg is defined on a set of all (including void) dipoles
+	// E=Einc*Exp(arg), but arg is defined on a set of all (including void) voxels
 	for (ind=0;ind<local_nRows;ind+=3) {
 		tmpc=cexp(arg[INDEX_GRID(ind)]);
 		cvMultScal_cmplx(tmpc,Einc+ind,Efield+ind);
@@ -1507,6 +1528,9 @@ int IterativeSolver(const enum iter method_in,const enum incpol which)
 	 *                                         D - symmetric interaction matrix of Green's tensor
 	 * we solve system (I+S.D.S).(S.x)=(S.b), S=sqrt(C), then total interaction matrix is symmetric and
 	 * Jacobi-preconditioned for any distribution of refractive index.
+	 *
+	 * Relative residual is defined by dividing by the norm of the righ-hand-side, i.e. |S.Einc|. This is more robust,
+	 * when various non-zero initial guesses are used.
 	 */
 	/* p=b=(S.Einc) is right part of the linear system; used only here. In iteration methods themselves p is completely
 	 * different vector. To avoid confusion this is done before any other initializations, specific to iterative solvers
@@ -1516,7 +1540,7 @@ int IterativeSolver(const enum iter method_in,const enum incpol which)
 	matvec_ready=false; // can be set to true only in CalcInitField (if !load_chpoint)
 	if (!load_chpoint) {
 		nMult_mat(pvec,Einc,cc_sqrt);
-		temp=nNorm2(pvec,&Timing_InitIterComm); // |r_0|^2 when x_0=0
+		temp=nNorm2(pvec,&Timing_InitIterComm); // |S.Einc|^2, but also equal to |r_0|^2 when x_0=0
 		resid_scale=1/temp;
 		epsB=iter_eps*iter_eps*temp;
 		// Calculate initial field

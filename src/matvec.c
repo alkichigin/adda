@@ -1,5 +1,6 @@
 /* Calculate local matrix vector product of decomposed interaction matrix with r_k or p_k, using a FFT-based convolution
  * algorithm. Also contains code for SPARSE (non-FFT) mode.
+ * Should not be used with OPENCL mode, but IDE syntax checking works fine even in this mode.
  *
  * Copyright (C) ADDA contributors
  * This file is part of ADDA.
@@ -36,9 +37,8 @@ extern doublecomplex * restrict arg_full;
 // defined and initialized in fft.c
 extern const doublecomplex * restrict Dmatrix,* restrict Rmatrix;
 extern doublecomplex * restrict Xmatrix,* restrict slices,* restrict slices_tr,* restrict slicesR,* restrict slicesR_tr;
-extern const size_t DsizeY,DsizeZ;
+extern const size_t DsizeY,DsizeZ,RsizeY;
 #endif // !SPARSE
-extern const size_t RsizeY;
 // defined and initialized in timing.c
 extern size_t TotalMatVec;
 
@@ -168,7 +168,7 @@ void MatVec (doublecomplex * restrict argvec,    // the argument vector
 	 *
 	 * For reflected matrix the situation is similar.
 	 * R.x=F(-1)(F(R).H(X)), where R is a vector, similar with G, where R[i,j,k=0] is for interaction of two bottom
-	 * dipoles. H(X) is FxFy(Fz^(-1)(X)), where Fx,... are Fourier transforms along corresponding coordinates. It can be
+	 * voxels. H(X) is FxFy(Fz^(-1)(X)), where Fx,... are Fourier transforms along corresponding coordinates. It can be
 	 * computed along with F(X).
 	 * Matrix R is symmetric (as a whole), but not in small parts, so R(i,j)=R(j,i)(T). Hence, in contrast to D, for
 	 * 'transpose' actual transpose (changing sign of a few elements) of 3x3 submatrix is required along with addressing

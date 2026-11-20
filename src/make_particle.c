@@ -1,4 +1,4 @@
-/* This module initializes the dipole set, either using predefined shapes or reading from a file;
+/* This module initializes the voxel set, either using predefined shapes or reading from a file;
  * includes granule generator
  *
  * Copyright (C) ADDA contributors
@@ -64,13 +64,13 @@ extern TIME_TYPE Timing_Granul,Timing_GranulComm;
 #endif
 
 // used in interaction.c
-double ZsumShift; // real distance between the lowest (in Z) dipoles and its image, must be positive
+double ZsumShift; // real distance between the lowest (in Z) voxel center and its image, must be positive
 // used in param.c
 bool volcor_used;                // volume correction was actually employed
 const char *sh_form_str1,*sh_form_str2; // strings for log file with shape parameters (first one should end with :)
 size_t gr_N;                     // number of granules
 double gr_vf_real;               // actual granules volume fraction
-size_t mat_count[MAX_NMAT+1];    // number of dipoles in each domain
+size_t mat_count[MAX_NMAT+1];    // number of voxels in each domain
 
 // LOCAL VARIABLES
 
@@ -88,11 +88,11 @@ static const char ddscat_format_write[]="%zu %d %d %d %d %d %d\n";
 static double volume_ratio;
 static double Ndip;              // total number of dipoles (in a circumscribing cube); has limited use in sparse mode
 static double dpl_def;           // default value of dpl
-static int minX,minY,minZ;       // minimum values of dipole positions in dipole file
-static FILE * restrict dipfile;  // handle of dipole file
-static enum shform read_format;  // format of dipole file, which is read
-static double cX,cY,cZ;          // center for DipoleCoord in units of dipoles (counted from 0)
-static double drelX,drelY,drelZ; // ratios of dipole sizes to the maximal one (dsX/dsMax...)
+static int minX,minY,minZ;       // minimum values of voxel positions in shape file
+static FILE * restrict dipfile;  // handle of dipole (shape) file
+static enum shform read_format;  // format of shape file, which is read
+static double cX,cY,cZ;          // center for DipoleCoord in units of voxels (counted from 0)
+static double drelX,drelY,drelZ; // ratios of voxel sizes to the maximal one (dsX/dsMax...)
 static double yx_ratio,zx_ratio; // ratios of particle dimensions along different axes
 
 #ifndef SPARSE
@@ -107,6 +107,8 @@ static double hdratio,invsqY,invsqY2,invsqZ,invsqZ2,haspY,haspZ;
 static double xcenter,zcenter; // coordinates of natural particle center (in units of Dx)
 static double rc_2,ri_2; // squares of circumscribed and inscribed spheres (circles) in units of Dx
 static double boundZ,zcenter1,zcenter2,ell_rsq1,ell_rsq2,ell_x1,ell_x2;
+static double * restrict onion_r2; //for onion
+static int nlayers; // for onion
 static double rbcP,rbcQ,rbcR,rbcS; // for RBC
 static double prang; // for prism
 static double seE,seN,seT,seR,seToverR,seInvR; // for superellipsoid
@@ -150,7 +152,7 @@ void ChebyshevParams(double eps_in,int n_in,double *dx,double *dz,double *sz,dou
 //======================================================================================================================
 
 static void SaveGeometry(void)
-// saves dipole configuration to a file
+// saves voxel configuration to a file
 {
 	char fname[MAX_FNAME];
 	FILE * restrict geom;
@@ -160,7 +162,7 @@ static void SaveGeometry(void)
 	 * Add code to this function to save geometry in new format. It should consist of:
 	 * 1) definition of default filename (by supplying an appropriate extension);
 	 * 2) writing header to the beginning of the file;
-	 * 3) writing a single line for each dipole (this is done in parallel).
+	 * 3) writing a single line for each voxel (this is done in parallel).
 	 * Each part is done in corresponding switch-case sequence
 	 */
 
@@ -308,7 +310,7 @@ void InitContourSegment(struct segment * restrict seg,const bool increasing)
 
 static void InitContour(const char *fname,double *ratio,double *shSize)
 /* Reads a contour from the file, rotates it so that it starts from a local minimum in ro, then divides it into
- * monotonic (over ro) segments. It produces data, which are later used to test each dipole for being inside the
+ * monotonic (over ro) segments. It produces data, which are later used to test each voxel center for being inside the
  * contour. Segments are either weakly increasing or weakly decreasing (i.e. can contain constant parts).
  */
 {
@@ -515,13 +517,13 @@ static inline int CheckCell(const double * restrict gr,const double * restrict v
 static size_t PlaceGranules(void)
 /* Randomly places granules inside the specified domain; Mersenne Twister is used for generating random numbers
  *
- * A simplest algorithm is used: to place randomly a sphere, and see if it overlaps with any dipoles (more exactly:
- * centers of dipoles) of not correct domain; if not, accept it and fill all this dipoles with granules' domain.
+ * A simplest algorithm is used: to place randomly a sphere, and see if it overlaps with any voxels (more exactly:
+ * with their centers) of not correct domain; if not, accept it and fill all this voxels with granules' domain.
  * Optimized to perform in two steps: First it places of set of not-intersecting granules and do only a quick check
  * against the "domain pattern" - coarse representation of the domain. On the second step granules of the whole set are
  * thoroughly checked against the whole domain on each processor. When small granules are used, no domain pattern is
- * used - makes it simpler. Intersection of two granules between the sets is checked only through dipoles, which is not
- * exact, however it allows considering arbitrary complex domains, which is described only by a set of occupied dipoles.
+ * used - makes it simpler. Intersection of two granules between the sets is checked only through voxels, which is not
+ * exact, however it allows considering arbitrary complex domains, which is described only by a set of occupied voxels.
  *
  * This algorithm is unsuitable for high volume fractions, it becomes very slow and for some volume fractions may fail
  * at all (Metropolis algorithm should be more suitable, however it is hard to code for arbitrary domains). Moreover,
@@ -534,8 +536,8 @@ static size_t PlaceGranules(void)
 {
 	int i,j,k,zerofit,last;
 	size_t n,count,count_gr,false_count,ui;
-	size_t nd;                           // number of dipoles occupied by granules
-	int index,index1,index2;             // indices for dipole grid
+	size_t nd;                           // number of dipoles (voxels) occupied by granules
+	int index,index1,index2;             // indices for voxel grid
 	int dom_index,dom_index1,dom_index2; // indices for auxiliary grid
 	int gX,gY,gZ;                        // auxiliary grid dimensions
 	size_t gXY,gr_gN;                    // ... and their products
@@ -548,7 +550,7 @@ static size_t PlaceGranules(void)
 	int locz0,locz1,locgZ,gr_locgN;
 	double R,R2,Di,Di2;          // radius and diameter of granule, and their squares
 	double x0,x1,y0,y1,z0,z1;    // where to put random number (inner box)
-	int id0,id1,jd0,jd1,kd0,kd1; // dipoles limit that fall inside inner box
+	int id0,id1,jd0,jd1,kd0,kd1; // dipoles (voxels) limit that fall inside inner box
 	int Nfit;        // number of successfully placed granules in a current set
 	double overhead; // estimate of the overhead needed to have exactly needed N of granules
 	double tmp1,tmp2,t1,t2,t3;
@@ -561,7 +563,7 @@ static size_t PlaceGranules(void)
 	unsigned short * restrict tree_index; // index for traversing granules inside one cell (small)
 	double * restrict vgran;              // coordinates of a set of granules
 	bool * restrict vfit;                 // results of granule fitting on the grid (boolean)
-	int * restrict ginX,* restrict ginY,* restrict ginZ; // indices to find dipoles inside auxiliary grid
+	int * restrict ginX,* restrict ginY,* restrict ginZ; // indices to find voxels inside auxiliary grid
 	int indX,indY,indZ;    // indices for doubled auxiliary grid
 	int bit;               // bit position in char of 'dom'
 	double gr[3];          // coordinates of a single granule
@@ -733,7 +735,7 @@ static size_t PlaceGranules(void)
 					t1=gr[0]-t1; // t_i are distances to the edges
 					t2=gr[1]-t2;
 					t3=gr[2]-t3;
-					// convert to usual coordinates (in dipole grid)
+					// convert to usual coordinates (in voxel grid)
 					gr[0]=gr[0]*gdX+x0;
 					gr[1]=gr[1]*gdY+y0;
 					gr[2]=gr[2]*gdZ+z0;
@@ -865,7 +867,7 @@ static size_t PlaceGranules(void)
 					index=indZ*gXY+indY*gX+indX;
 					// two simple checks
 					if (!(dom[index]&bit) && occup[index]==MAX_GR_SET) {
-						// convert to usual coordinates (in dipole grid)
+						// convert to usual coordinates (in voxel grid)
 						gr[0]=gr[0]*gdXh+x0;
 						gr[1]=gr[1]*gdYh+y0;
 						gr[2]=gr[2]*gdZh+z0;
@@ -949,12 +951,12 @@ static size_t PlaceGranules(void)
 		}
 		// collect fits
 		ExchangeFits(vfit,cur_Ngr,&Timing_GranulComm);
-		// fit dipole grid with successive granules
+		// fit voxel grid with successive granules
 		Nfit=n;
 		for (ig=0;ig<cur_Ngr && n<gr_N;ig++) {
 			if (vfit[ig]) { // a successful granule
 				n++;
-				// fill dipoles in the sphere with granule material
+				// fill voxels in the sphere with granule material
 				memcpy(gr,vgran+3*ig,3*sizeof(double));
 				k0=MAX((int)ceil(gr[2]-R),local_z0);
 				k1=MIN((int)floor(gr[2]+R),local_z1_coer-1);
@@ -1041,13 +1043,13 @@ static size_t PlaceGranules(void)
 #endif // !SPARSE
 
 static void InitDipFile(const char * restrict fname,int *bX,int *bY,int *bZ,int *Nm,const char **rft)
-/* read dipole file first to determine box sizes and Nmat; input is not checked for very large numbers (integer
+/* read dipole (shape) file first to determine box sizes and Nmat; input is not checked for very large numbers (integer
  * overflows) to increase speed; this function opens file for reading, the file is closed in ReadDipFile.
  */
 {
 	int x,y,z,mat,scanned,mustbe;
 	size_t line,skiplines,nd;
-	double ds_Ndip; // number of dipoles declared in DDSCAT file
+	double ds_Ndip; // number of dipoles (voxels) declared in DDSCAT file
 	bool anis_warned;
 	bool ds_lf; // whether 6-th line matches pattern for DDSCAT 7 format
 	int t2,t3; // dumb variables
@@ -1102,10 +1104,10 @@ static void InitDipFile(const char * restrict fname,int *bX,int *bY,int *bZ,int 
 		fseek(dipfile,0,SEEK_SET);
 		line=SkipComments(dipfile);
 		/* scanf and analyze Nmat; if there is blank line between comments and Nmat, it fails later; the value of Nmat
-		 * obtained here is not actually relevant, the main factor is maximum domain number among all dipoles.
+		 * obtained here is not actually relevant, the main factor is maximum domain number among all voxels.
 		 */
 		scanned=fscanf(dipfile,"Nmat=%d\n",Nm);
-		if (scanned==EOF) LogError(ONE_POS,"No dipole positions are found in %s",fname);
+		if (scanned==EOF) LogError(ONE_POS,"No voxel positions are found in %s",fname);
 		else if (scanned==0) { // no "Nmat=..."
 			/* It is hard to perform rigorous test for SF_TEXT since any number of blank lines can be present before the
 			 * data lines. Therefore this format is determined by exclusion of other possibilities. Hence, errors in
@@ -1161,7 +1163,7 @@ static void InitDipFile(const char * restrict fname,int *bX,int *bY,int *bZ,int 
 			case SF_DDSCAT7: // for ddscat formats, only first material is used, other two are ignored
 				scanned=sscanf(linebuf,ddscat_format_read1,&x,&y,&z,&mat,&t2,&t3);
 				if (!anis_warned && (t2!=mat || t3!=mat)) {
-					LogWarning(EC_WARN,ONE_POS,"Anisotropic dipoles are detected in file %s (first on line %zu). ADDA "
+					LogWarning(EC_WARN,ONE_POS,"Anisotropic voxels are detected in file %s (first on line %zu). ADDA "
 						"ignores this anisotropy, using only the identifier of x-component of refractive index as "
 						"domain number",fname,line);
 					anis_warned=true;
@@ -1170,17 +1172,17 @@ static void InitDipFile(const char * restrict fname,int *bX,int *bY,int *bZ,int 
 		}
 		/* TO ADD NEW FORMAT OF SHAPE FILE
 		 * Add code to scan a single data line and perform consistency checks if necessary. The common variables to be
-		 * scanned are 'x','y','z' (integer positions of dipoles) and possibly 'mat' - domain number. 'scanned' should
+		 * scanned are 'x','y','z' (integer positions of voxels) and possibly 'mat' - domain number. 'scanned' should
 		 * be set to be tested below.
 		 */
 		// if sscanf returns EOF, that is a blank line -> just skip
 		if (scanned!=EOF) {
 			if (scanned!=mustbe) LogError(ONE_POS,"%s was detected, but error occurred during scanning of line %zu "
-				"from dipole file %s",rf_text,line,fname); // this in most cases indicates wrong format
+				"from shape file %s",rf_text,line,fname); // this in most cases indicates wrong format
 			nd++;
 			if (read_format!=SF_TEXT) {
 				if (mat<=0) LogError(ONE_POS,"%s was detected, but nonpositive material number (%d) encountered during "
-					"scanning of line %zu from dipole file %s",rf_text,mat,line,fname);
+					"scanning of line %zu from shape file %s",rf_text,mat,line,fname);
 				else if (mat>maxN) maxN=mat;
 			}
 			/* TO ADD NEW FORMAT OF SHAPE FILE
@@ -1203,11 +1205,11 @@ static void InitDipFile(const char * restrict fname,int *bX,int *bY,int *bZ,int 
 		case SF_TEXT: break; // no specific tests
 		case SF_TEXT_EXT:
 			if (*Nm!=maxN) LogWarning(EC_WARN,ONE_POS,"Nmat (%d), as given in %s, is not equal to the maximum domain "
-				"number (%d) among all specified dipoles; hence the former is ignored",*Nm,fname,maxN);
+				"number (%d) among all specified voxels; hence the former is ignored",*Nm,fname,maxN);
 			break;
 		case SF_DDSCAT6:
 		case SF_DDSCAT7:
-			if (nd!=ds_Ndip) LogWarning(EC_WARN,ONE_POS,"Number of dipoles (%.0f), as given in the beginning of %s, is "
+			if (nd!=ds_Ndip) LogWarning(EC_WARN,ONE_POS,"Number of voxels (%.0f), as given in the beginning of %s, is "
 				"not equal to the number of data lines actually present and scanned (%zu)",ds_Ndip,fname,nd);
 			break;
 	}
@@ -1232,7 +1234,7 @@ static void InitDipFile(const char * restrict fname,int *bX,int *bY,int *bZ,int 
 //======================================================================================================================
 
 static void ReadDipFile(const char * restrict fname)
-/* read dipole file; no consistency checks are made since they are made in InitDipFile. The file is opened in
+/* read dipole (shape) file; no consistency checks are made since they are made in InitDipFile. The file is opened in
  * InitDipFile; this function only closes the file.
  *
  * The operation is quite different in FFT and sparse modes. In FFT mode only material is set here, while position is
@@ -1262,23 +1264,23 @@ static void ReadDipFile(const char * restrict fname)
 		}
 		/* TO ADD NEW FORMAT OF SHAPE FILE
 		 * Add code to scan a single data line. The common variables to be scanned are 'x0','y0','z0' (integer positions
-		 * of dipoles) and  possibly 'mat' - domain number. 'scanned' should be set to be tested against EOF below. The
+		 * of voxels) and  possibly 'mat' - domain number. 'scanned' should be set to be tested against EOF below. The
 		 * code is similar to the one in InitDipFile() but can be simpler because no consistency checks are performed.
 		 */
 		line++;
 		// if sscanf returns EOF, that is a blank line -> just skip
 		if (scanned!=EOF) {
-			// shift dipole position to be nonnegative
+			// shift voxel position to be nonnegative
 			x0-=minX;
 			y0-=minY;
 			z0-=minZ;
-			// initialize box jagged*jagged*jagged instead of one dipole
+			// initialize box jagged*jagged*jagged instead of one voxel
 #ifndef SPARSE
 			for (z=jagged*z0;z<jagged*(z0+1);z++) if (z>=local_z0 && z<local_z1_coer)
 				for (x=jagged*x0;x<jagged*(x0+1);x++) for (y=jagged*y0;y<jagged*(y0+1);y++) {
 					index=(z-local_z0)*boxXY+y*boxX_l+x;
 					if (material_tmp[index]!=Nmat)
-						LogError(ONE_POS,"Duplicate dipole was found at line %zu in dipole file %s",line,fname);
+						LogError(ONE_POS,"Duplicate voxel was found at line %zu in shape file %s",line,fname);
 					material_tmp[index]=(unsigned char)(mat-1);
 			}
 #else
@@ -1313,17 +1315,17 @@ static int FitBox(const int box)
 //======================================================================================================================
 
 static int FitBox_yz(const double size)
-/* given the size of the particle in y or z direction (in units of dipoles), finds the closest grid size, which would
+/* given the size of the particle in y or z direction (in units of voxels), finds the closest grid size, which would
  * satisfy the FitBox function. The rounding is performed so to minimize the maximum difference between the stack of
- * dipoles and corresponding particle dimension.
- * The distance between the center of the outer super-dipole (J^3 original dipoles) and the particle (enclosing box)
+ * voxels and corresponding particle dimension.
+ * The distance between the center of the outer super-dipole (J^3 original voxels) and the particle (enclosing box)
  * boundary is between 0.25 and 0.75 of super-dipole size, corresponding to the discretization along the x-axis, for
- * which the optimum distance of 0.5 (the dipole cube fits tight into the boundary) is automatically satisfied.
+ * which the optimum distance of 0.5 (the voxel fits tight into the boundary) is automatically satisfied.
  *
- * !!! However, it is still possible that the whole outer layer of dipoles would be void because the estimate does not
+ * !!! However, it is still possible that the whole outer layer of voxels would be void because the estimate does not
  * take into account the details of the shape e.g. its curvature. For instance, 'adda -grid 4 -shape ellipsoid 1 2.13'
- * results in grid 4x4x9, but the layers z=0, z=8 will be void. This is because the dipole centers in this layers always
- * have non-zero x and y coordinates (at least half-dipole in absolute value) and do not fall inside the ellipsoid,
+ * results in grid 4x4x9, but the layers z=0, z=8 will be void. This is because the voxel centers in this layers always
+ * have non-zero x and y coordinates (at least half-voxel in absolute value) and do not fall inside the ellipsoid,
  * although the points {+-4,0,0} do fall into it.
  */
 {
@@ -1374,7 +1376,7 @@ void InitShape(void)
 		if (tmp2<tmp1) tmp2=tmp1;
 	}
 	dpl_def=10*sqrt(tmp2);
-	// initialize relative dipole sizes
+	// initialize relative voxel sizes
 	rsMax=MAX(rectScaleX,MAX(rectScaleY,rectScaleZ));
 	drelX=rectScaleX/rsMax;
 	drelY=rectScaleY/rsMax;
@@ -1621,8 +1623,8 @@ void InitShape(void)
 			/* determined by equation: (a/r)^2=1+nu*cos(theta)-(1-eps)cos^2(theta) or equivalently:
 			 * a^2=r^2+nu*r*z-(1-eps)z^2. Parameters must be 0<eps<=1, 0<=nu<eps. This shape is proposed in:
 			 * Hahn D.V., Limsui D., Joseph R.I., Baldwin K.C., Boggs N.T., Carr A.K., Carter C.C., Han T.S., and
-			 * Thomas M.E. "Shape characteristics of biological spores", paper 6954-31 to be presented at
-			 * "SPIE Defence + Security", March 2008
+			 * Thomas M.E. "Shape characteristics of biological spores", paper 6954-31, presented at
+			 * "SPIE Defense + Security", March 2008
 			 */
 			double ad;
 			double ct,ct2; // cos(theta0) and its square
@@ -1688,6 +1690,54 @@ void InitShape(void)
 			volume_ratio=UNDEF;
 			Nmat_need=1;
 			break;
+		case SH_ONION: {
+			nlayers=sh_Npars+1;
+			MALLOC_VECTOR(onion_r2,double,nlayers-1,ALL);
+			for (i=0;i<sh_Npars;i++) {
+				if (i==0) TestRangeII(sh_pars[i],"diameter ratio d2/d",0,1);
+				else TestRangeII(sh_pars[i],"one of internal diameter ratios",0,sh_pars[i-1]);
+				onion_r2[i]=0.25*sh_pars[i]*sh_pars[i];
+				}
+			if (IFROOT) {
+				char *layer_str;
+				sh_form_str1=dyn_sprintf("onion (%d layers); diameter(d):",nlayers);
+				layer_str=dyn_sprintf(", internal diameter ratios d_i/d: ("GFORM,sh_pars[0]);
+				for (i=1;i<sh_Npars;i++) layer_str=rea_sprintf(layer_str,", "GFORM,sh_pars[i]);
+				sh_form_str2=rea_sprintf(layer_str,")");
+			}
+			yx_ratio=zx_ratio=1;
+			Nmat_need=nlayers;
+			volume_ratio=PI_OVER_SIX;
+			break;
+		}
+		case SH_ONION_ELL: {
+			yx_ratio=sh_pars[0];
+			TestPositive(yx_ratio,"aspect ratio y/x");
+			zx_ratio=sh_pars[1];
+			TestPositive(zx_ratio,"aspect ratio z/x");
+			nlayers=sh_Npars-1;
+			MALLOC_VECTOR(onion_r2,double,nlayers-1,ALL);
+			for (i=2;i<sh_Npars;i++) {
+				if (i==2) TestRangeII(sh_pars[i],"semi-axis ratio x2/x",0,1);
+				else TestRangeII(sh_pars[i],"one of internal semi-axis ratios",0,sh_pars[i-1]);
+				onion_r2[i-2]=0.25*sh_pars[i]*sh_pars[i];
+			}
+			if (IFROOT) {
+				char *layer_str;
+				sh_form_str1=dyn_sprintf("%d-layered ellipsoid; size along x-axis:",nlayers);
+				layer_str=dyn_sprintf(", aspect ratios y/x="GFORM", z/x="GFORM", internal semi-axis ratios x_i/x: ("
+					GFORM,yx_ratio,zx_ratio,sh_pars[2]);
+				for (i=3;i<sh_Npars;i++) layer_str=rea_sprintf(layer_str,", "GFORM,sh_pars[i]);
+				sh_form_str2=rea_sprintf(layer_str,")");
+			}
+			if (yx_ratio!=1) symR=false;
+			Nmat_need=nlayers;
+			volume_ratio=PI_OVER_SIX*yx_ratio*zx_ratio;
+			// set inverse squares of aspect ratios
+			invsqY=1/(yx_ratio*yx_ratio);
+			invsqZ=1/(zx_ratio*zx_ratio);
+			break;
+		}
 		case SH_PLATE: {
 			double diskratio; // ratio of height to diameter
 
@@ -1830,7 +1880,7 @@ void InitShape(void)
 			Nmat_need=1;
 			/* Volume is given analytically by Eq.(4) in T. Wriedt, "Using the T-matrix method for light scattering
 			 * computations by non-axisymmetric particles: Superellipsoids and realistically shaped particles," Part.
-			 * Part. Sys. Charact. 19, 256-268 (2002).
+			 * Part. Syst. Charact. 19, 256-268 (2002).
 			 * Since the relevant box volume is 8a^3, the volume ratio (1/4)(b/a)(c/a)*n*B(n/2 +1,n)*e*B(e/2,e/2).
 			 * Both n*B(n/2 +1,n) and e*B(e/2,e/2) are continuous to zero, and can be reliably computed using lgamma.
 			 * Still we need to explicitly handle edge cases when n or e are 0.
@@ -2015,7 +2065,7 @@ void InitShape(void)
 		// this error is not duplicated in the log file since it does not yet exist
 		if (n_boxY>boxY || n_boxZ>boxZ)
 			PrintError("Particle (boxY,Z={%d,%d}) does not fit into specified boxY,Z={%d,%d}",n_boxY,n_boxZ,boxY,boxZ);
-		// redundant void dipoles may break the symmetry with respect to the center of the whole box
+		// redundant void voxels may break the symmetry with respect to the center of the whole box
 		if (IS_ODD((boxY-n_boxY)/jagged)) symY=false;
 		if (IS_ODD((boxZ-n_boxZ)/jagged)) symZ=false;
 	}
@@ -2024,7 +2074,7 @@ void InitShape(void)
 	/* Ndip can be arbitrary huge in sparse mode, but then it's not used for any loop bounds (like nvoid_Ndip)
 	 * Otherwise, it has to fit into size_t bounds
 	 */
-	if (Ndip > SIZE_MAX) LogError(ONE_POS,"Total number of dipoles in the circumscribing box (%.0f) is larger than "
+	if (Ndip > SIZE_MAX) LogError(ONE_POS,"Total number of voxels in the circumscribing box (%.0f) is larger than "
 		"supported by size_t type on this system (%zu). If possible, recompile ADDA in 64-bit mode.",
 		Ndip,SIZE_MAX);
 #endif // !SPARSE
@@ -2042,8 +2092,23 @@ void InitShape(void)
 
 //======================================================================================================================
 
+static inline int DescendingSearch(const double key,const double *arr,const int n) 
+/* given array sorted in descending order (of size n), returns i such that arr[i-1] <= key < arr[i]
+ * specifically, returns 0 for key < arr[0] and n for arr[n-1] <= key .
+ * If arr[i-1]=key=arr[i] the returned value can be either i or i-1 (depending on implementation).
+ * Currently, the simplest linear search is used. Writing a well-optimized version for n ~ 100 is not-trivial.
+ */
+{
+	int i;
+	
+	for (i=0;i<n;i++) if (key>arr[i]) return i;
+	return n;
+}	
+
+//======================================================================================================================
+
 void MakeParticle(void)
-// creates a particle; initializes all dipoles counts, dpl, dipole sizes
+// creates a particle; initializes all voxel counts, dpl, voxel sizes
 {
 
 	size_t index,dip,i3;
@@ -2053,16 +2118,16 @@ void MakeParticle(void)
 	size_t local_nRows_tmp;
 	int j,k,ns;
 	double tmp1,tmp2,tmp3;
-	double xr,yr,zr;  // dipole coordinates relative to sizeX. xr is inside (-1/2,1/2), others - based on aspect ratios
-	/* Normalized dipole coordinates for superellipsoid: |x/a|, |y/b|, |z/c|. They should be from 0 to 1 if no void grid
+	double xr,yr,zr;  // voxel coordinates relative to sizeX. xr is inside (-1/2,1/2), others - based on aspect ratios
+	/* Normalized voxel coordinates for superellipsoid: |x/a|, |y/b|, |z/c|. They should be from 0 to 1 if no void grid
 	 * layers are used. Currently cannot be used for other shapes.
 	 */
 	double xn,yn,zn;
 	double xcoat,ycoat,zcoat,r2,ro2,z2,zshift,xshift;
 	int local_z0_unif; // should be global or semi-global
 	int largerZ,smallerZ; // number of larger and smaller z in intersections with contours
-	/* The following are dipole coordinates (in units of d/2) relative to the grid center. For jagged they point to the
-	 * center of a larger dipole. Units are chosen to keep integer (otherwise half-integers are possible), but the step
+	/* The following are voxel coordinates (in units of d/2) relative to the grid center. For jagged they point to the
+	 * center of a larger cuboid. Units are chosen to keep integer (otherwise half-integers are possible), but the step
 	 * of variation is 2*jagged.
 	 */
 	int xj,yj,zj;
@@ -2096,9 +2161,9 @@ void MakeParticle(void)
 		yj=2*jagged*(j/jagged)+jagged-boxY;
 		zj=2*jagged*(k/jagged)+jagged-boxZ;
 		/* all the following coordinates should be scaled by the same sizeX. So we scale xj,yj,zj by 2boxX with extra
-		 * ratio for rectangular dipoles. Thus, yr and zr are not necessarily in fixed ranges (like from -1/2 to 1/2).
+		 * ratio for rectangular voxels. Thus, yr and zr are not necessarily in fixed ranges (like from -1/2 to 1/2).
 		 * This is done to treat adequately cases when particle dimensions are the same (along different axes), but e.g.
-		 * boxY!=boxX (so there are some extra void dipoles). All anisotropies in the particle itself are treated in
+		 * boxY!=boxX (so there are some extra void voxels). All anisotropies in the particle itself are treated in
 		 * the specific shape modules below (see e.g. ELLIPSOID).
 		 */
 		xr=(0.5*xj)/boxX;
@@ -2178,7 +2243,7 @@ void MakeParticle(void)
 				}
 				break;
 			case SH_COATED:
-				if (xr*xr+yr*yr+zr*zr<=0.25) { // first test to skip some dipoles immediately)
+				if (xr*xr+yr*yr+zr*zr<=0.25) { // first test to skip some voxels immediately)
 					xcoat=xr-coat_x;
 					ycoat=yr-coat_y;
 					zcoat=zr-coat_z;
@@ -2212,6 +2277,15 @@ void MakeParticle(void)
 				 */
 				if ((yj==0 || yj==-jagged) && (zj==0 || zj==-jagged)) mat=0;
 				break;
+			case SH_ONION:
+				r2=xr*xr+yr*yr+zr*zr;
+				if (r2<=0.25) mat=DescendingSearch(r2,onion_r2,nlayers-1);
+				break;
+			case SH_ONION_ELL:
+				r2=xr*xr+yr*yr*invsqY+zr*zr*invsqZ;
+				// only consider voxels inside particle
+				if (r2<=0.25) mat=DescendingSearch(r2,onion_r2,nlayers-1);
+				break;
 			case SH_PLATE:
 				ro2=xr*xr+yr*yr;
 				if (ro2<=0.25 && fabs(zr)<=hdratio) {
@@ -2228,7 +2302,7 @@ void MakeParticle(void)
 				if (ro2<=rc_2 && fabs(zr)<=hdratio) {
 					if (ro2<=ri_2) mat=0;
 					/* this can be optimized considering special cases for small N. For larger N the relevant
-					 * fraction of dipoles decrease as N^-2, so this part is less problematic.
+					 * fraction of voxels decrease as N^-2, so this part is less problematic.
 					 */
 					else {
 						tmp1=cos(fmod(fabs(atan2(yr,xshift))+prang,2*prang)-prang);
@@ -2294,7 +2368,7 @@ void MakeParticle(void)
 		position_tmp[3*index]=(unsigned short)i;
 		position_tmp[3*index+1]=(unsigned short)j;
 		position_tmp[3*index+2]=(unsigned short)k;
-		// afterwards multiplied by dipole sizes
+		// afterwards multiplied by voxel sizes
 		material_tmp[index]=(unsigned char)mat;
 		index++;
 	} // End box loop
@@ -2309,7 +2383,7 @@ void MakeParticle(void)
 	memory+=3*sizeof(int)*nvoid_Ndip+sizeof(char)*local_nvoid_Ndip;
 #endif // SPARSE
 	if (shape==SH_READ) ReadDipFile(shape_fname);
-	// initialization of mat_count and dipoles counts
+	// initialization of mat_count and dipole (voxel) counts
 	for(i=0;i<=Nmat;i++) mat_count[i]=0;
 #ifdef SPARSE
 	for(dip=0;dip<local_Ndip;dip++) mat_count[material[dip]]++;
@@ -2321,11 +2395,11 @@ void MakeParticle(void)
 	MyInnerProduct(mat_count,sizet_type,Nmat+1,NULL);
 	nvoid_Ndip=(size_t)Ndip-mat_count[Nmat];
 #endif // !SPARSE
-	if (nvoid_Ndip==0) LogError(ONE_POS,"All dipoles of the scatterer are void");
+	if (nvoid_Ndip==0) LogError(ONE_POS,"All voxels of the scatterer are void");
 	local_nRows=3*local_nvoid_Ndip;
 	// initialize dpl and gridspace
 	volcor_used=(volcor && (volume_ratio!=UNDEF));
-	double dipVR=drelX*drelY*drelZ; // ratio of dipole volume to enclosing cube
+	double dipVR=drelX*drelY*drelZ; // ratio of voxel volume to enclosing cube
 	if (sizeX==UNDEF) {
 		if (a_eq!=UNDEF) dpl=lambda*pow(dipVR*nvoid_Ndip*THREE_OVER_FOUR_PI,ONE_THIRD)/a_eq;
 		else if (dpl==UNDEF) dpl=creal(mhost)*dpl_def; // default value of dpl
@@ -2342,7 +2416,7 @@ void MakeParticle(void)
 	if ((IntRelation==G_FCD || PolRelation==POL_FCD) && dpl<=2)
 		LogError(ONE_POS,"Too small dpl for FCD formulation, should be at least 2");
 	// initialize gridspace, dipvol, and kd*
-	double dsMax=lambda/dpl; // maximum dipole size
+	double dsMax=lambda/dpl; // maximum dipole (voxel) size
 	dsX=dsMax*drelX;
 	dsY=dsMax*drelY;
 	dsZ=dsMax*drelZ;
@@ -2381,7 +2455,7 @@ ka_eq = creal(WaveNum*a_eq);
 		tgran=GET_TIME();
 		Timing_GranulComm=0;
 		// calculate number of granules
-		if (mat_count[gr_mat]==0) LogError(ONE_POS,"Domain to be granulated does not contain any dipoles");
+		if (mat_count[gr_mat]==0) LogError(ONE_POS,"Domain to be granulated does not contain any voxels");
 		tmp1=gridspace/gr_d;
 		tmp2=mat_count[gr_mat]*gr_vf*SIX_OVER_PI;
 		tmp3=tmp2*tmp1*tmp1*tmp1;
@@ -2424,13 +2498,14 @@ ka_eq = creal(WaveNum*a_eq);
 		Free_general(contSegRoMin);
 		Free_general(contSegRoMax);
 	}
+	else if (shape==SH_ONION || shape==SH_ONION_ELL) Free_general(onion_r2);
 #else
 	position=position_full + 3*local_nvoid_d0;
 #endif // SPARSE
 	// initialize DipoleCoord
 	MALLOC_VECTOR(DipoleCoord,double,local_nRows,ALL);
 	memory+=3*sizeof(double)*local_nvoid_Ndip;
-	double minZco=0; // minimum Z coordinates of dipoles
+	double minZco=0; // minimum Z coordinates of voxel center
 	for (index=0; index<local_nvoid_Ndip; index++) {
 		i3=3*index;
 		DipoleCoord[i3] = (position[i3]-cX)*dsX;
@@ -2438,14 +2513,14 @@ ka_eq = creal(WaveNum*a_eq);
 		DipoleCoord[i3+2] = (position[i3+2]-cZ)*dsZ;
 		if (minZco>DipoleCoord[i3+2]) minZco=DipoleCoord[i3+2]; // crude way to find the minimum on the way
 	}
-	/* test that particle is wholly above the substrate; strictly speaking, we test dipole centers to be above the
+	/* test that particle is wholly above the substrate; strictly speaking, we test voxel centers to be above the
 	 * substrate - hsub+minZco>0, while the geometric boundary of the particle may still intersect with the substrate.
 	 * However, the current test is sufficient to ensure that corresponding routines to calculate reflected Green's
-	 * tensor do not fail (but see also below). And accuracy of the DDA itself is anyway questionable when some of the
-	 * dipoles are very close to the substrate (whether they cross it or not).
+	 * tensor do not fail (but see also below). And accuracy of DDA itself is anyway questionable when some of the
+	 * voxels are very close to the substrate (whether they cross it or not).
 	 */
-	if (surface && hsub<=-minZco) LogError(ALL_POS,"The particle must be entirely above the substrate. There exists a "
-		"dipole with z="GFORMDEF" (relative to the center), making specified height of the center ("GFORMDEF") too "
+	if (surface && hsub<=-minZco) LogError(ALL_POS,"The particle must be entirely above the substrate. There exist a "
+		"voxel with z="GFORMDEF" (relative to the center), making specified height of the center ("GFORMDEF") too "
 		"small",minZco,hsub);
 	// save geometry
 	if (save_geom)
@@ -2483,7 +2558,7 @@ ka_eq = creal(WaveNum*a_eq);
 	 * it is relevant even for sparse mode, since the Sommerfeld integrals are calculated on a grid even for that case.
 	 */
 	if (surface && ZsumShift<=0) LogError(ALL_POS,"The particle must be entirely above the substrate. While all real "
-		"dipoles are above, there are layers in the grid, which centers are below the substrate. This can be either "
+		"voxels are above, there are layers in the grid, which centers are below the substrate. This can be either "
 		"due to narrow features in the particle shapes, missed by discretization, or due to manually extended grid "
 		"dimension along the z-axis.");
 

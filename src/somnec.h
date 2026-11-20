@@ -1,7 +1,7 @@
 /* Header for calculation of Sommerfeld integrals
  *
  * Copyright (C) ADDA contributors
- * This file is part of ADDA.
+ * This file is part of ADDA, but can also be used separately.
  *
  * ADDA is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
  * published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
@@ -16,6 +16,9 @@
 #define __somnec_h
 
 // system headers
+#ifdef __STDC_NO_COMPLEX__
+#	error "Support of C99-type complex numbers is strictly required."
+#endif
 /* ADDA uses doublecomplex macro instead of standard 'complex double', but we use the latter in somnec.c/h to
  * keep them standalone
  */

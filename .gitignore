@@ -6,8 +6,13 @@
 .DS_Store
 
 # for Eclipse
-.сproject
-.project 
+/eclipse/
+/.сproject
+/.project
+/.settings/
+
+# for VS Code
+/.vscode
 *.xml
-.cproject
-misc/ADDAwrapper/__pycache__/ADDAwrapper.cpython-39.pyc
+/.cproject
+misc/ADDAwrapper/__pycache__/

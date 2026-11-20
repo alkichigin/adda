@@ -1,4 +1,5 @@
-/* Functions for printing debugging information when compiling with option -DDEBUGFULL
+/* Functions for printing debugging information when compiling with option -DDEBUGFULL.
+ * Should only be used with this macro, but IDE syntax checking works fine even without it.
  *
  * Copyright (C) ADDA contributors
  * This file is part of ADDA.
@@ -12,14 +13,6 @@
  * You should have received a copy of the GNU General Public License along with ADDA. If not, see
  * <http://www.gnu.org/licenses/>.
  */
-
-/* This file should be compiled only in full debug mode, hence the following declaration is redundant. However, it helps
- * proper syntax checking in IDE, such as Eclipse.
- */
-#ifndef DEBUGFULL
-#  define DEBUGFULL
-#endif
-
 #include "const.h" // keep this first
 #include "debug.h" // corresponding header
 // project headers
@@ -60,7 +53,7 @@ void DebugPrintf(ERR_LOC_DECL,const char * restrict fmt, ... )
 //======================================================================================================================
 
 void FieldPrint (doublecomplex * restrict x)
-/* print current field at certain dipole -- not used; left for deep debug; NOT ROBUST, since DipoleCoord is not always
+/* print current field at certain voxel -- not used; left for deep debug; NOT ROBUST, since DipoleCoord is not always
  * available
  */
 {

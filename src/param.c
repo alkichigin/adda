@@ -107,7 +107,7 @@ extern const size_t mat_count[];
 
 // used in CalculateE.c
 bool store_int_field; // save full internal fields to text file
-bool store_dip_pol;   // save dipole polarizations to text file
+bool store_dip_pol;   // save dipole (voxel) polarizations to text file
 bool store_beam;      // save incident beam to file
 bool store_scat_grid; // Store the scattered field for grid of angles
 bool calc_Cext;       // Calculate the extinction cross-section - always do
@@ -116,7 +116,7 @@ bool calc_Csca;       // Calculate the scattering cross-section by integration
 bool calc_vec;        // Calculate the unnormalized asymmetry-parameter
 bool calc_asym;       // Calculate the asymmetry-parameter
 bool calc_mat_force;  // Calculate the scattering force by matrix-evaluation
-bool store_force;     // Write radiation pressure per dipole to file
+bool store_force;     // Write radiation pressure per voxel to file
 bool store_ampl;      // Write amplitude matrix to file
 int phi_int_type;     // type of phi integration (each bit determines whether to calculate with different multipliers)
 // used in calculator.c
@@ -155,14 +155,14 @@ enum sh shape;                   // particle shape definition
 int sh_Npars;                    // number of shape parameters
 double sh_pars[MAX_N_SH_PARMS];  // storage for shape parameters
 double sizeX;                    // size of particle along x-axis
-double dpl;                      // number of dipoles per lambda (wavelength)
+double dpl;                      // number of dipoles (voxels) per lambda (wavelength)
 double lambda;                   // incident wavelength (in vacuum)
-int jagged;                      // size of big dipoles, used to construct a particle
+int jagged;                      // size of large cuboids (super-dipoles), used to construct a particle
 const char *shape_fname;         // name of file, defining the shape
-const char *save_geom_fname;     // geometry file name to save dipole configuration
+const char *save_geom_fname;     // geometry file name to save voxel configuration
 const char *shapename;           // name of the used shape
 bool volcor;                     // whether to use volume correction
-bool save_geom;                  // whether to save dipole configuration in .geom file
+bool save_geom;                  // whether to save voxel configuration in .geom file
 opt_index opt_sh;                // option index of shape option used
 double gr_vf;                    // granules volume fraction
 double gr_d;                     // granules diameter
@@ -310,14 +310,25 @@ static const struct subopt_struct shape_opt[]={
 	{"coated","<d_in/d> [<x/d> <y/d> <z/d>]","Sphere with a spherical inclusion; outer sphere has a diameter d (first "
 		"domain). The included sphere has a diameter d_in (optional position of the center: x,y,z).",UNDEF,SH_COATED},
 	{"coated2","<ds/d> <dc/d>","Three concentric spheres (core with 2 shells). Outer sphere has a diameter d (first "
-		"domain), intermediate sphere (shell) - ds (second domain), and the internal core - dc (third domain).",2,
-		SH_COATED2},
+		"domain), intermediate sphere (shell) - ds (second domain), and the internal core - dc (third domain). This "
+		"shape is DEPRECATED, use 'onion' instead.",2,SH_COATED2},
 	{"cylinder","<h/d>","Homogeneous cylinder with height (length) h and diameter d (its axis of symmetry coincides "
 		"with the z-axis).",1,SH_CYLINDER},
 	{"egg","<eps> <nu>","Axisymmetric egg shape given by a^2=r^2+nu*r*z-(1-eps)z^2, where 'a' is scaling factor. "
 		"Parameters must satisfy 0<eps<=1, 0<=nu<eps.",2,SH_EGG},
 	{"ellipsoid","<y/x> <z/x>","Homogeneous general ellipsoid with semi-axes x,y,z",2,SH_ELLIPSOID},
-	{"line","","Line along the x-axis with the width of one dipole",0,SH_LINE},
+	{"line","","Line along the x-axis with the width of one voxel",0,SH_LINE},
+	{"onion","<d2/d> [<d3/d> ... <dn/d>]","Multilayered concentric sphere (core with arbitrary number of shells). "
+		"n is the total number of particle domains, corresponding to a core with n-1 shells. Outer shell is between "
+		"the spheres of diameters d and d2 (first domain), next one - between d2 and d3 (second domain), etc., down to "
+		"the core with diameter dn (n-th domain). Maximum number of domains is " TO_STRING(MAX_NMAT) " (controlled by "
+		"the parameter MAX_NMAT in const.h).",
+		UNDEF,SH_ONION},
+	{"onion_ell","<y/x> <z/x> <x2/x> [<x3/x> ... <xn/x>]","Multilayered concentric ellipsoid (core with arbitrary "
+		"number of shells) with semi-axes x,y,z. Outer shell is between the ellipsoids with semi-axes (along the "
+		"x-axis) x and x2 (first domain), next one - between x2 and x3 (second domain), etc., down to the core with "
+		"semi-axis xn (n-th domain). Maximum number of domains is " TO_STRING(MAX_NMAT) " (controlled by the parameter "
+		"MAX_NMAT in const.h).",UNDEF,SH_ONION_ELL},
 	{"plate", "<h/d>","Homogeneous plate (cylinder with rounded side) with cylinder height h and full diameter d (i.e. "
 		"diameter of the constituent cylinder is d-h). Its axis of symmetry coincides with the z-axis.",1,SH_PLATE},
 	{"prism","<n> <h/Dx>","Homogeneous right prism with height (length along the z-axis) h based on a regular polygon "
@@ -527,7 +538,7 @@ static struct opt_struct options[]={
 		"'fcd' - Filtered Coupled Dipoles - requires dpl to be larger than 2.\n"
 		"'fcd_st' - static (long-wavelength limit) version of FCD.\n"
 		"'igt' - Integration of Green's Tensor. Its parameters are: <lim> - maximum distance (in units of the largest "
-		"dipole size), for which integration is used, (default: infinity); <prec> - minus decimal logarithm of "
+		"voxel size), for which integration is used, (default: infinity); <prec> - minus decimal logarithm of "
 		"relative error of the integration, i.e. epsilon=10^(-<prec>) (default: the same as the argument (or default "
 		"value) of '-eps' command line option).\n"
 #ifdef NO_FORTRAN
@@ -569,7 +580,7 @@ static struct opt_struct options[]={
 		 * add the short name, used to define the new iterative solver in the command line, to the list "{...}" in the
 		 * alphabetical order.
 		 */
-	{PAR(jagged),"<arg>","Sets a size of a big dipole in units of small dipoles, integer. It is used to improve the "
+	{PAR(jagged),"<arg>","Sets a size of a large cuboid in units of small voxels, integer. It is used to improve the "
 		"discretization of the particle without changing the shape.\n"
 		"Default: 1",1,NULL},
 	{PAR(lambda),"<arg>","Sets incident wavelength in um, float.\n"
@@ -578,8 +589,8 @@ static struct opt_struct options[]={
 		"indices, float. Each pair of arguments specifies real and imaginary part of the refractive index of one of "
 		"the domains. If '-anisotr' is specified, three refractive indices correspond to one domain (diagonal elements "
 		"of refractive index tensor in particle reference frame). Maximum number of different refractive indices is "
-		"defined at compilation time by the parameter MAX_NMAT in file const.h (by default, 15). None of the "
-		"refractive indices can be equal to 1+0i.\n"
+    TO_STRING(MAX_NMAT) " (controlled by the parameter MAX_NMAT in const.h). None of the refractive indices can be "
+    "equal to 1+0i.\n"
 		"Default: 1.5 0",UNDEF,NULL},
 	{PAR(maxiter),"<arg>","Sets the maximum number of iterations of the iterative solver, integer.\n"
 		"Default: very large, not realistic value",1,NULL},
@@ -588,9 +599,9 @@ static struct opt_struct options[]={
 	{PAR(no_reduced_fft),"","Do not use symmetry of the interaction matrix to reduce the storage space for the "
 		"Fourier-transformed matrix.",0,NULL},
 	{PAR(no_vol_cor),"","Do not use 'dpl (volume) correction'. If this option is given, ADDA will try to match size of "
-		"the dipole grid along x-axis to that of the particle, either given by '-size' or calculated analytically from "
-		"'-eq_rad'. Otherwise (by default) ADDA will try to match the volumes, using either '-eq_rad' or the value "
-		"calculated analytically from '-size'.",0,NULL},
+		"the voxel grid along the x-axis to that of the particle, either given by '-size' or calculated analytically "
+		"from '-eq_rad'. Otherwise (by default) ADDA will try to match the volumes, using either '-eq_rad' or the "
+		"value calculated analytically from '-size'.",0,NULL},
 	{PAR(ntheta),"<arg>","Sets the number of intervals, into which the range of scattering angles [0,180] (degrees) is "
 		"equally divided, integer. This is used for scattering angles in yz-plane. If particle is not symmetric and "
 		"orientation averaging is not used, the range is extended to 360 degrees (with the same length of elementary "
@@ -612,18 +623,18 @@ static struct opt_struct options[]={
 		"Examples: 1 (one integration with no multipliers),\n"
 		"          6 (two integration with cos(2*phi) and sin(2*phi) multipliers).",1,NULL},
 	{PAR(pol),"{cldr|cm|dgf|fcd|igt_so|lak|ldr [avgpol]|nloc <Rp>|nloc_av <Rp>|rrc}",
-		"Sets prescription to calculate the dipole polarizability.\n"
+		"Sets prescription to calculate the voxel polarizability.\n"
 		"'cldr' - Corrected LDR (see below), incompatible with '-anisotr'.\n"
 		"'cm' - (the simplest) Clausius-Mossotti.\n"
 		"'dgf' - Digitized Green's Function (second order approximation to LAK).\n"
 		"'fcd' - Filtered Coupled Dipoles (requires dpl to be larger than 2).\n"
-		"'igt_so' - Integration of Green's tensor over a cube (second-order approximation).\n"
+		"'igt_so' - Integration of Green's tensor over a cuboid (second-order approximation).\n"
 		"'lak' - (by Lakhtakia) exact integration of Green's Tensor over a sphere.\n"
 		"'ldr' - Lattice Dispersion Relation, optional flag 'avgpol' can be added to average polarizability over "
 		"incident polarizations.\n"
 		"'nloc' - non-local (Gaussian dipole density, based on lattice sums), <Rp> is the width of the latter in um "
 		"(must be non-negative).\n"
-		"'nloc_av' - same as 'nloc' but based on averaging of Gh over the dipole volume.\n"
+		"'nloc_av' - same as 'nloc' but based on averaging of Gh over the voxel volume.\n"
 		"'rrc' - Radiative Reaction Correction (added to CM).\n"
 		"Only poi,cldr, and igt_so can be used with '-rect_dip'.\n"
 		"Default: ldr (without averaging) or cldr (for -rect_dip).",UNDEF,NULL},
@@ -638,13 +649,13 @@ static struct opt_struct options[]={
 		"For electron incident beam this determines electron propagation direction.\n"
 		"Default: 0 0 1",3,NULL},
 	{PAR(recalc_resid),"","Recalculate residual at the end of iterative solver.",0,NULL},
-	{PAR(rect_dip),"<x> <y> <z>","Use rectangular-cuboid dipoles. Three arguments are the relative dipole sizes along "
+	{PAR(rect_dip),"<x> <y> <z>","Use rectangular-cuboid dipoles. Three arguments are the relative voxel sizes along "
 		"the corresponding axes. Absolute scale is irrelevant, i.e. '1 2 2' is equivalent to '0.5 1 1'. Cannot be used "
 		"with '-anisotr' and '-granul'. The compatible polarizability and interaction-term formulations are also "
 		"limited.\n"
 		"Default: 1 1 1",3,NULL},
 #ifndef SPARSE
-	{PAR(save_geom),"[<filename>]","Save dipole configuration to a file <filename> (a path relative to the output "
+	{PAR(save_geom),"[<filename>]","Save voxel configuration to a file <filename> (a path relative to the output "
 		"directory). Can be used with '-prognosis'.\n"
 		"Default: <type>.geom \n"
 		"(<type> is a first argument to the '-shape' option; '_gran' is added if '-granul' option is used; file "
@@ -653,7 +664,7 @@ static struct opt_struct options[]={
 #endif // !SPARSE
 	{PAR(scat),"{dr|fin|igt_so}","Sets prescription to calculate scattering quantities.\n"
 		"'dr' - (by Draine) standard formulation for point dipoles\n"
-		"'fin' - slightly different one, based on a radiative correction for a finite dipole.\n"
+		"'fin' - slightly different one, based on a radiative correction for a finite voxel.\n"
 		"'igt_so' - second-order approximation to integration of Green's tensor.\n"
 		"Default: dr",1,NULL},
 	{PAR(scat_grid_inp),"<filename>","Specifies a file with parameters of the grid of scattering angles for "
@@ -690,7 +701,7 @@ static struct opt_struct options[]={
 		1,NULL},
 	{PAR(store_beam),"","Save incident beam to a file",0,NULL},
 	{PAR(store_dip_pol),"","Save dipole polarizations to a file",0,NULL},
-	{PAR(store_force),"","Calculate the radiation force on each dipole. Implies '-Cpr'",0,NULL},
+	{PAR(store_force),"","Calculate the radiation force on each voxel. Implies '-Cpr'",0,NULL},
 #ifndef SPARSE
 	{PAR(store_grans),"","Save granule coordinates (placed by '-granul' option) to a file",0,NULL},
 #endif
@@ -972,8 +983,8 @@ static int TimeField(const char c)
 		case 'M': return 60;
 		case 's':
 		case 'S': return 1;
+		default: PrintErrorHelp("Illegal time format specifier (%c)",c);
 	}
-	PrintErrorHelp("Illegal time format specifier (%c)",c);
 }
 
 //======================================================================================================================
@@ -1499,9 +1510,9 @@ PARSE_FUNC(rect_dip)
 	ScanDoubleError(argv[1],&rectScaleX);
 	ScanDoubleError(argv[2],&rectScaleY);
 	ScanDoubleError(argv[3],&rectScaleZ);
-	TestPositive(rectScaleX,"x-scale of rectangular dipole");
-	TestPositive(rectScaleY,"y-scale of rectangular dipole");
-	TestPositive(rectScaleZ,"z-scale of rectangular dipole");
+	TestPositive(rectScaleX,"x-scale of cuboid voxel");
+	TestPositive(rectScaleY,"y-scale of cuboid voxel");
+	TestPositive(rectScaleZ,"z-scale of cudoid voxel");
 	rectDip=true;
 	if (rectScaleX!=rectScaleY) symR=false;
 }
@@ -1577,6 +1588,17 @@ PARSE_FUNC(shape)
 		switch (shape) {
 			case SH_COATED: if (Narg!=1 && Narg!=4) NargError(Narg,"1 or 4"); break;
 			case SH_BOX: if (Narg!=0 && Narg!=2) NargError(Narg,"0 or 2"); break;
+			// For onions only general bounds are checked
+			case SH_ONION:
+				if (Narg<1) NargError(Narg,"at least 1");
+				if (Narg>(MAX_NMAT-1)) PrintErrorHelp("Too many layers (%d), maximum %d are supported. "
+					"You may increase parameter MAX_NMAT in const.h and recompile.",Narg+1,MAX_NMAT);
+				break;
+			case SH_ONION_ELL:
+				if (Narg<3) NargError(Narg,"at least 3");
+				if (Narg>(MAX_NMAT+1)) PrintErrorHelp("Too many layers (%d), maximum %d are supported. "
+					"You may increase parameter MAX_NMAT in const.h and recompile.",Narg-1,MAX_NMAT);
+				break;
 			default: TestNarg(Narg,need); break;
 		}
 		/* TO ADD NEW SHAPE
@@ -1584,8 +1606,14 @@ PARSE_FUNC(shape)
 		 * number of received arguments as a new case above. Use NargError function similarly as done in existing tests.
 		 */
 		// either parse filename or parse all parameters as float; consistency is checked later
-		if (!ScanFnamesError(Narg,need,argv+2,&shape_fname,NULL))
+		if (!ScanFnamesError(Narg,need,argv+2,&shape_fname,NULL)) {
+			// This should never happen if proper correspondence is kept between MAX_N_SH_PARMS and MAX_NMAT
+			if (Narg>MAX_N_SH_PARMS) 
+				PrintError("Insufficient MAX_N_SH_PARMS=%d for parsing %d shape arguments",MAX_N_SH_PARMS,Narg);
 			for (j=0;j<Narg;j++) ScanDoubleError(argv[j+2],sh_pars+j);
+		}
+		if (shape==SH_COATED2) 
+			LogWarning(EC_WARN,ONE_POS,"'-shape coated2 ...' is deprecated, use '-shape onion ...' instead");
 		// stop search
 		found=true;
 		break;
@@ -1666,7 +1694,7 @@ PARSE_FUNC(test)
 }
 PARSE_FUNC(V)
 {
-	char copyright[]="\n\nCopyright (C) 2006-2022 ADDA contributors\n"
+	char copyright[]="\n\nCopyright (C) 2006-2025 ADDA contributors\n"
 		"This program is free software; you can redistribute it and/or modify it under the terms of the GNU General "
 		"Public License as published by the Free Software Foundation; either version 3 of the License, or (at your "
 		"option) any later version.\n\n"
@@ -1766,7 +1794,7 @@ PARSE_FUNC(V)
 		printf("Linked to Open MPI version %d.%d.%d\n",OMPI_MAJOR_VERSION,OMPI_MINOR_VERSION,OMPI_RELEASE_VERSION);
 #	elif defined(MSMPI_VER)
 		// Microsoft MPI uses hex version number (weird)
-		printf("Linked to Microsoft MPI version 0x%x\n",MSMPI_VER);
+		printf("Linked to Microsoft MPI version %d.%d\n",MSMPI_VER/256,MSMPI_VER%256);
 #	endif
 		// Additional debug information about MPI implementation
 #	ifndef SUPPORT_MPI_BOOL
@@ -2236,7 +2264,7 @@ void VariablesInterconnect(void)
 	}
 	if (rectDip) {
 		if (PolRelation!=POL_CLDR && PolRelation!=POL_CM && PolRelation!=POL_IGT_SO)
-			PrintError("The specified polarizability formulation is designed only for cubical dipoles. Currently, only "
+			PrintError("The specified polarizability formulation is designed only for cubical voxels. Currently, only "
 			"the following formulations can be used with rectangular dipoles: cm, cldr, and igt_so");
 		else if (PolRelation!=POL_IGT_SO && (IntRelation==G_IGT || IntRelation==G_IGT_SO)) LogWarning(EC_WARN,ONE_POS,
 			"Using IGT interaction with point-dipole polarizability formulations will produce wrong results for "
@@ -2244,7 +2272,7 @@ void VariablesInterconnect(void)
 		if (anisotropy) PrintError("Currently '-anisotr' and '-rect_dip' can not be used together");
 		if (sh_granul) PrintError("Currently '-granul' and '-rect_dip' can not be used together");
 		if (IntRelation!=G_POINT_DIP && IntRelation!=G_IGT && IntRelation!=G_IGT_SO)
-			PrintError("The specified interaction formulation is designed only for cubical dipoles. Currently, only "
+			PrintError("The specified interaction formulation is designed only for cubical voxels. Currently, only "
 				"'poi', 'igt', and 'igt_so' can be used with rectangular dipoles");
 	}
 	if (anisotropy) {
@@ -2279,7 +2307,7 @@ void VariablesInterconnect(void)
 		 * Take a look at the above logic, and revise if the new formulation is not fully consistent with it
 		 */
 		 if (rectDip && ReflRelation==GR_SOM && rectScaleX!=rectScaleY) PrintError("Currently calculation of "
-			"Sommerfeld integrals (default for the surface mode) requires dipoles to have the same dimensions along "
+			"Sommerfeld integrals (default for the surface mode) requires voxels to have the same dimensions along "
 			"the x- and y-axes (but not z)");
 	}
 	if (absorbing_host) { // currently a lot of limitations for the absorbing medium

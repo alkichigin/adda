@@ -160,7 +160,7 @@ static inline void InitIGTvars(const double rvec[static restrict 3],double qmunu
 	doublecomplex_t result[static restrict 6],const double wave_num,const double ds_x,const double ds_y,
 	const double ds_z,double *rr,double *invr3,double *kr,double *kr2,double *D,double *u,double *invvol,double *ds_x2,
 	double *ds_y2,double *ds_z2,double *halfk2,double *invr,doublecomplex_t *expval,doublecomplex_t *ksi)
-// initialize common variables, inluding point value of G
+// initialize common variables, including point value of G
 {
 	double qvec[3]; // scaled unit directional vector {rx,ry,rz}/r
 	*invvol=1.0/ds_x/ds_y/ds_z;
@@ -229,7 +229,7 @@ static inline void CalcTripleDiffFB(const double rvec[static restrict 3],const d
 		B_term[ind0]=0;
 	}
 
-	// iterate over 8 corners of the dipole (voxel)
+	// iterate over 8 corners of the voxel
 	for (indX=-1;indX<2;indX+=2) for (indY=-1;indY<2;indY+=2) for (indZ=-1;indZ<2;indZ+=2) {
 		Rvec[0]=rvec[0] + 0.5*indX*ds_x;
 		Rvec[1]=rvec[1] + 0.5*indY*ds_y;
@@ -391,4 +391,5 @@ void CalcIGTso(const double rvec[static restrict 3],const double wave_num,const 
 	if (wave_num*wave_num*r2 > 25) CalcIGTso_far(rvec,wave_num,ds_x,ds_y,ds_z,result);
 	else if (25*r2 > d*d) CalcIGTso_medium(rvec,wave_num,ds_x,ds_y,ds_z,result);
 	else CalcIGTso_near(rvec,wave_num,ds_x,ds_y,ds_z,result);
+	// TODO: Currently fails whenever any part of rvec is zero (which is strange)
 }

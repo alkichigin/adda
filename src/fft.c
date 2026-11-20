@@ -13,6 +13,14 @@
  * You should have received a copy of the GNU General Public License along with ADDA. If not, see
  * <http://www.gnu.org/licenses/>.
  */
+/* The following tests for compilation inconsistencies, but also helps proper syntax checking in IDE, such as Eclipse.
+ * Otherwise, a lot of unresolved-symbol errors are produced, when another build configuration is selected.
+ */
+#ifdef SPARSE
+#  error "This file is incompatible with SPARSE"
+#  undef SPARSE
+#endif
+
 #include "const.h" // keep this first
 #include "fft.h" // corresponding header
 // project headers
@@ -326,7 +334,7 @@ void TransposeYZ(const int direction)
 	size_t enqtglobalzy[3]={gridZ,gridY,3*local_gridX};
 	size_t enqtglobalyz[3]={gridY,gridZ,3*local_gridX};
 
-	//if the grid is not dividable by blocksize, extend it. Kernel takes care of borders
+	// if the grid is not divisible by blocksize, extend it. Kernel takes care of borders
 	size_t tgridZ = (gridZ%blocksize==0) ? gridZ : (gridZ/blocksize+1)*blocksize;
 	size_t tgridY = (gridY%blocksize==0) ? gridY : (gridY/blocksize+1)*blocksize;
 	enqtglobalzy[0]=tgridZ;
@@ -765,11 +773,16 @@ static void fftInitAfterD(void)
 	CLFFT_CH_ERR(clfftBakePlan(clplanZ,1,&command_queue,NULL,NULL));
 	CLFFT_CH_ERR(clfftGetTmpBufSize(clplanZ,&bufsize));
 	clfftBufSize+=bufsize;
-	/* In most cases clfftBufSize is zero, except some weird grid sizes like 2x2x60000. Still, we rigorously account
-	 * for this memory. However, we do not update oclMemMaxObj, since even single plan is not guaranteed to allocate a
-	 * single object. So we assume that clFFT will either handle maximum object size itself or produce a meaningful
-	 * error.
+	/* In many cases clfftBufSize is zero. It seems to be not-zero when the FFT size has many prime factors, like
+	 * 2*3*5*7 or 2*3*11 (small powers of the same factor counts as one). Large numbers (>2000) also seem to require
+	 * buffers.
+	 * We rigorously account for clfftBufSize, but we do not update oclMemMaxObj, since even single plan is not
+	 * guaranteed to allocate a single object. So we assume that clFFT will either handle maximum object size itself
+	 * or produce a meaningful error.
 	 */
+	if (clfftBufSize!=0) { // inside {} to remove warnings
+		D("Non-zero clFFT buffers, total size "FFORMM" MB\n",clfftBufSize/MBYTE);
+	}
 	oclMem+=clfftBufSize;
 	MAXIMIZE(oclMemPeak,oclMem);
 #	elif defined(CLFFT_APPLE)
@@ -966,7 +979,6 @@ static void InitRmatrix(const double invNgrid)
 #endif
 }
 
-
 //======================================================================================================================
 
 void InitDmatrix(void)
@@ -1064,8 +1076,8 @@ void InitDmatrix(void)
 	CREATE_CL_BUFFER(bufXmatrix,CL_MEM_READ_WRITE,local_Nsmall*3*sizeof(doublecomplex),NULL);
 #	ifdef OCL_BLAS
 	if (IterMethod==IT_BICG_CS) { // currently, used only in one iterative solver
-		// Most clBLAS functions require scratch buffer of size N, but Dznrm2 - 2N
-		CREATE_CL_BUFFER(buftmp,CL_MEM_READ_WRITE,local_nRows*2*sizeof(doublecomplex),NULL);
+		// Most clBLAS functions require scratch buffer of size N (Dznrm2 requires 2N, but it is not currently used)
+		CREATE_CL_BUFFER(buftmp,CL_MEM_READ_WRITE,local_nRows*sizeof(doublecomplex),NULL);
 		CREATE_CL_BUFFER(bufxvec,CL_MEM_READ_WRITE,local_nRows*sizeof(doublecomplex),NULL);
 		CREATE_CL_BUFFER(bufrvec,CL_MEM_READ_WRITE,local_nRows*sizeof(doublecomplex),NULL);
 	}
@@ -1097,14 +1109,22 @@ void InitDmatrix(void)
 	 * during further iterations. There is little we can do with these problems, apart from using '-opt mem').
 	 */
 	const size_t memReserve = 100*MBYTE; // memory reserved for all other GPU needs (including desktop,etc.)
+	/* Determines the maximum size of slice (not larger than 32 - empirical limit). It is not larger than gridX and
+	 * lowered further if 32 is not a divisor of gridX (a general potentially redundant expression is used).
+	 * TODO: reconsider if large chunks are beneficial at all. Some tests in 2025 seem to suggest that they can be
+	 * detrimental (probably due to larger memory transfers)
+	 */
+	size_t maxLgrX = MIN(32,gridX); // sets empirical limit for size of block
+	const size_t maxSlices = DIV_CEILING(gridX,maxLgrX);
+	maxLgrX = DIV_CEILING(gridX,maxSlices);
 	if (save_memory) { // fall back to one-layer-at-a-time implementation
 		local_gridX=1;
 		clxslices=gridX;
 		D("Using 1-layer x-slices (memory optimization)");
 	}
 	else if (prognosis) { // maximum memory, should not necessarily fit in the current GPU
-		local_gridX=gridX;
-		clxslices=1;
+		local_gridX=maxLgrX;
+		clxslices=DIV_CEILING(gridX,local_gridX);
 		D("Using the largest x-slices (prognosis mode)");
 	}
 	else if (oclMemDev<oclMem+memReserve) {
@@ -1123,19 +1143,18 @@ void InitDmatrix(void)
 		// local_gridX is always at least 1 (possible errors of insufficient memory are ignored here)
 		local_gridX=MIN(memAvail/(slbufnum*memLayer),oclMemDevObj/memLayer);
 		if (local_gridX==0) local_gridX=1;
-		if (local_gridX>32) local_gridX=32;
+		if (local_gridX>maxLgrX) local_gridX=maxLgrX;
 		if (gridX%local_gridX==0) clxslices=gridX/local_gridX; // automatic uniform division
 		else {
 			clxslices=(gridX/local_gridX)+1;
 			local_gridX=DIV_CEILING(gridX,clxslices); // adjust local_gridX to be closer to uniform division
-			// if gridX<=32; the above code will set local_gridX=gridX
 		}
 
 		D("Already occupied OpenCL memory: "FFORMM" MB,\n"
 			"     available for x-slices: "FFORMM" MB (excluding "FFORMM" MB reserve),\n"
 			"     required for the largest x-slices: "FFORMM" MB",
-			oclMem/MBYTE,memAvail/MBYTE,memReserve/MBYTE,(memLayer/MBYTE)*gridX*slbufnum);
-		if (local_gridX==gridX) { // braces {} are to remove warnings
+			oclMem/MBYTE,memAvail/MBYTE,memReserve/MBYTE,(memLayer/MBYTE)*maxLgrX*slbufnum);
+		if (local_gridX==maxLgrX) { // braces {} are to remove warnings
 			D("Using the largest x-slices (sufficient memory)");
 		}
 		else {
