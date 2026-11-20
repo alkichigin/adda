@@ -33,7 +33,9 @@
 #include "vars.h"
 // system headers
 #include <stdio.h>
+#include <stdlib.h> // for abs()
 #include <string.h>
+#include <float.h>
 
 // SEMI-GLOBAL VARIABLES
 
@@ -63,10 +65,13 @@ static double scale_x,scale_z; // multipliers for scaling coordinates
 static doublecomplex ki,kt;    // abs of normal components of k_inc/k0, and ktran/k0
 static doublecomplex ktVec[3]; // k_tran/k0
 static double p0;              // amplitude of the incident dipole moment
-static doublecomplex gamma_eps_inv;// 1/gamma_eps
-static doublecomplex e_pref; // prefactor of the field of the electron
+static doublecomplex beta1, gamma1_inv;// v*m/c, 1/gamma
+static doublecomplex e_pref1; // prefactor of the field of the electron
 static double e_w_v;   // prefactor in an argument of a phase exponent in the incident field of the electron
-static doublecomplex e_w_gv;  // prefactor in an argument of the Bessel_K in the incident field of the electron
+static doublecomplex e_w_gv1, e_w_gv2;  // prefactor in an argument of the BesselK, incBesselJ in the incident field of the electron
+static doublecomplex eps1, eps2; //dielectric permittivity of the media above and below the plane surface
+static doublecomplex vgw, vgw2; //Some constants for the field of an electron
+static doublecomplex e_w;        // parameter w of eq (S12): coth(w)=beta1, branch continuous from beta1>1 (Im w<=0)
 #ifndef NO_FORTRAN
 static int besN;                  // Bessel beam order
 static double besAlpha;           // half-cone angle (in radians)
@@ -85,6 +90,105 @@ static doublecomplex besM[4];     // Matrix M defining the generalized Bessel be
 void bjndd_(const int *n,const double *x,double *bj,double *dj,double *fj);
 #endif
 
+
+
+/* Field of the electron near a plane interface (substrate), image approximation for the incident field.
+ * The implementation follows the Supporting Information of the substrate EELS/CL paper (equation numbers S..):
+ *   F0(r-r0,v) - eq (S55), full-line field in homogeneous medium 1;
+ *   F(r,r0,v)  - eq (S79), field of the part of the trajectory below the interface, with the endpoint terms
+ *                of the transmitted and reflected half-lines cancelled analytically (eq S78);
+ *   E_inc = -C{F0(r-r0,v) + r_st[F(r,r0,v) + F(r,~r0,~v)]}, eq (S82);
+ *   E_a   = +C{F0(r-r0,-v) + r_st[F(r,r0,-v) + F(r,~r0,-~v)]}, eq (S84);
+ *   parallel beam (v_z=0) - eqs (S92), (S93).
+ * C = q*omega*mu0/(4*pi*beta1^2*gamma1) corresponds to e_pref1 (CGS; q_electron<0 only changes the overall sign of
+ * both fields, which is irrelevant for all computed quantities). The interface is the plane z=-hsub.
+ * The distance to each trajectory is thresholded from below by electron_rho_floor*dsX (beam placement and singularity
+ * handling, Section "Software implementation" of the SI).
+ */
+#ifndef ELECTRON_RHO_FLOOR
+#	define ELECTRON_RHO_FLOOR 0.5
+#endif
+static const double electron_rho_floor = ELECTRON_RHO_FLOOR; // threshold of the distance to the trajectory, units of dsX
+static const double incK_tol = 1e-10;         // relative tolerance of series for incomplete Bessel functions
+
+static void ElectronF0(const double obs[static 3],const double r0[static 3],const double vhat[static 3],
+	doublecomplex out[static 3])
+// F0(r-r0,v) = 2exp(i*xi*s)[K1(kt*rho)*rhohat - (i/gamma1)*K0(kt*rho)*vhat], eq (S55); vhat - unit velocity vector
+{
+	double r1[3],rhovec[3],rhohat[3]={0,0,0},s,rho;
+	doublecomplex zeta,t1,t2,t3,t4,t5,t6,K0,K1,ph;
+	int k;
+
+	LinComb(obs,r0,1,-1,r1);
+	s=DotProd(r1,vhat);
+	LinComb(r1,vhat,1,-s,rhovec);
+	rho=vNorm(rhovec);
+	if (rho>0) vMultScal(1/rho,rhovec,rhohat);
+	if (rho<electron_rho_floor*dsX) rho=electron_rho_floor*dsX;
+	zeta=e_w_gv1*rho;
+	cik01_(&zeta,&t1,&t2,&t3,&t4,&K0,&t5,&K1,&t6);
+	ph=2*imExp(e_w_v*s);
+	for (k=0;k<3;k++) out[k]=ph*(K1*rhohat[k]-I*gamma1_inv*K0*vhat[k]);
+}
+
+static void ElectronF(const double obs[static 3],const double r0[static 3],const double vhat[static 3],
+	doublecomplex out[static 3])
+/* F(r,r0,v), eq (S79): I1^(-sz)*rhohat - (i/gamma1)*I0^(-sz)*vhat + sz*exp(i*k*Rc+i*xi*p)/(kt*Rc)*(vhat-sc/rho*rhohat),
+ * with I_nu^(+-)(rho,s) = exp(i*xi*s)*K_nu(kt*rho,+-(w-u)), eq (S69); vhat[2]!=0
+ */
+{
+	const int sz=(vhat[2]>0) ? 1 : -1;
+	const double z0=r0[2]+hsub, p=-z0/vhat[2];
+	double rc[3],Rc[3],rhovec[3],rhohat[3]={0,0,0},sc,rho,Rcn,u;
+	doublecomplex eta,zeta,ph,I0,I1,last;
+	int k;
+
+	LinComb(r0,vhat,1,p,rc);         // crossing point, eq (S60)
+	LinComb(obs,rc,1,-1,Rc);         // eq (S61)
+	sc=DotProd(Rc,vhat);
+	LinComb(Rc,vhat,1,-sc,rhovec);
+	rho=vNorm(rhovec);
+	if (rho>0) vMultScal(1/rho,rhovec,rhohat);
+	if (rho<electron_rho_floor*dsX) rho=electron_rho_floor*dsX;
+	Rcn=sqrt(rho*rho+sc*sc);
+	u=asinh(sc/rho);                 // eq (S64)
+	eta=-sz*(e_w-u);
+	zeta=e_w_gv1*rho;
+	ph=imExp(e_w_v*(sc+p));          // exp(i*xi*s), s=sc+p
+	I0=ph*incK(0,zeta,eta,incK_tol);
+	I1=ph*incK(1,zeta,eta,incK_tol);
+	last=sz*imExp(WaveNum0*Rcn+e_w_v*p)/(e_w_gv1*Rcn);
+	for (k=0;k<3;k++) out[k]=I1*rhohat[k]-I*gamma1_inv*I0*vhat[k]+last*(vhat[k]-(sc/rho)*rhohat[k]);
+}
+
+static void ElectronSubstrateField(const double obs[static 3],const double r0[static 3],const double dir[static 3],
+	const bool auxiliary,doublecomplex out[static 3])
+/* incident (auxiliary=false), eq (S82), or auxiliary (auxiliary=true), eq (S84), field of the electron moving along
+ * dir through r0, at point obs above the interface; the auxiliary field corresponds to inverting both q and v
+ */
+{
+	double v[3],vim[3],r0im[3];
+	doublecomplex f0[3],f1[3],f2[3];
+	const doublecomplex rst=(eps1-eps2)/(eps1+eps2);
+	const doublecomplex pref=(auxiliary ? 1 : -1)*e_pref1;
+	int k;
+
+	for (k=0;k<3;k++) v[k]=auxiliary ? -dir[k] : dir[k];
+	vCopy(v,vim); vim[2]=-v[2];                 // reflected velocity, eq (S62)
+	vCopy(r0,r0im); r0im[2]=-r0[2]-2*hsub;      // reflected origin, eq (S62)
+	ElectronF0(obs,r0,v,f0);
+	if (v[2]!=0) {
+		ElectronF(obs,r0,v,f1);
+		ElectronF(obs,r0im,vim,f2);
+		for (k=0;k<3;k++) out[k]=pref*(f0[k]+rst*(f1[k]+f2[k]));
+	}
+	else if (r0[2]+hsub>=0) { // parallel beam above the interface, eqs (S92), (S93)
+		ElectronF0(obs,r0im,vim,f2);
+		for (k=0;k<3;k++) out[k]=pref*(f0[k]+rst*f2[k]);
+	}
+	else for (k=0;k<3;k++) out[k]=pref*(1+rst)*f0[k]; // parallel beam inside the substrate: t_st, eq (S4)
+}
+
 //======================================================================================================================
 
 void InitBeam(void)
@@ -93,14 +197,11 @@ void InitBeam(void)
 	double w0; // beam width
 	//CASE: B_ELECTRON
 	static double e_energy;        // kinetic energy of the electron
-	static doublecomplex beta_eps;// v*m_host/c
 	static double e_v;      // speed of the electron
 	double q_electron = -4.803204673e-10; //electric charge of an electron, cm^(3/2)*g^(1/2)*s^(-1)
 	double c_light = 29979245800; //speed of light in vacuum, cm/s
 	const double e_energy_rest = 510.99895; //Electron rest mass, keV
 	const char *tmp_str; // temporary string
-	//q_electron *= sqrt(10)*1e10; //scale cm->nm
-	//c_light *= 1e7; //scale cm->nm
 	/* TO ADD NEW BEAM
 	 * Add here all intermediate variables, which are used only inside this function.
 	 */
@@ -203,7 +304,7 @@ void InitBeam(void)
 			return;
 		case B_ELECTRON:
 			//Electron field is in CGS. Electron field in SI would look the same, except multiplied by 1/(4*pi*eps0)
-			if (surface) PrintError("Currently, electron incident beam is not supported for '-surf'");
+			//if (surface) PrintError("Currently, electron incident beam is not supported for '-surf'");
 			// initialize parameters
 			e_energy=beam_pars[0];
 			TestPositive(e_energy,"kinetic energy of the electron");
@@ -211,18 +312,33 @@ void InitBeam(void)
 			//symX=symY=symZ=symR=false;
 			if (!beam_asym) vInit(beam_center);
 			e_v = c_light*sqrt(1-pow((e_energy_rest/(e_energy+e_energy_rest)),2));
-			beta_eps = e_v*mhost/c_light;
-			gamma_eps_inv = cSqrtCut(1-beta_eps*beta_eps);
+			beta1 = e_v*mhost/c_light;
+			//gamma_eps_inv = cSqrtCut(1-beta_eps*beta_eps);
+			gamma1_inv=1/cSqrtCut(1/(1-beta1*beta1));
 			//printf("gamma_eps_inv\t=\t"CFORM"\n",REIM(gamma_eps_inv));
-			//printf("omega = "EFORM"\n",WaveNum*c_light/scale_z);
+			//printf("w = "EFORM"\n",WaveNum0*c_light);
 			//printf("v = "EFORM"\n",e_v);
 			e_w_v = WaveNum0*c_light/e_v;
 			//printf("e_w_v\t=\t"CFORM"\n",REIM(e_w_v));
-			e_w_gv = e_w_v*gamma_eps_inv;
+			e_w_gv1 = e_w_v*gamma1_inv;
 			//printf("e_w_gv\t=\t"CFORM"\n",REIM(e_w_gv));
-			e_pref = 2*q_electron*(WaveNum0*1e7)*gamma_eps_inv/(beta_eps*beta_eps*c_light); // (q*k0/c) must be in statV/cm => multiplying k0*1e7
+			e_pref1 = q_electron*(WaveNum0*1e7)*gamma1_inv/(beta1*beta1*c_light); // (q*k0/c) must be in statV/cm => multiplying k0*1e7
 			//printf("e_pref = "CFORM"\n",REIM(e_pref));
+			if(surface){
+				if(mhost != 1) PrintError("Currently, '-mhost' is not supported for '-surf'");
+				inc_scale=1;
+				vgw = e_v/(gamma1_inv*WaveNum0*c_light);
+				vgw2 = vgw*vgw;
+				//printf("vgw\t=\t"CFORM"\n",REIM(vgw));
+				//printf("vgw2\t=\t"CFORM"\n",REIM(vgw2));
+				eps1 = mhost*mhost;
+				eps2 = msub*msub;
+				e_w = ArcCoth(beta1);
+				//printf("msub\t=\t"CFORM"\n",REIM(msub));
+			}
 			if (IFROOT) beam_descr=dyn_sprintf("The electron with the %g keV energy moving through "GFORM3V,e_energy,COMP3V(beam_center_0));
+
+
 			return;
 #ifndef NO_FORTRAN
 		case B_BES_CS:
@@ -240,6 +356,10 @@ void InitBeam(void)
 			besAlpha=Deg2Rad(beam_pars[1]);
 			besKt=WaveNum*sin(besAlpha);
 			besKz=WaveNum*cos(besAlpha);
+			/* redundant initialization to remove warnings. Compiler is not sure about constancy of IFROOT due to
+			 * ringid being a global variable
+			 */
+			tmp_str="";
 			switch (beamtype) { // definition of elements of matrix M ((Mex,Mey),(Mmx,Mmy))
 				case B_BES_CS:
 					TestRangeII(beam_pars[1],"half-cone angle",0,90);
@@ -345,17 +465,20 @@ void InitBeam(void)
 
 void GenerateB (const enum incpol which,   // x - or y polarized incident light
                 doublecomplex *restrict b) // the b vector for the incident field
-// generates incident beam at every dipole
+// generates incident beam at every voxel center
 {
 	size_t i,j;
 	doublecomplex psi0,Q,Q2;
-	doublecomplex v1[3],v2[3],v3[3],gt[6];
+	doublecomplex v1[3],v2[3],v3[3],gt[6],Einc_charge[3],Einc_image[3],Ea_charge[3],Ea_image[3];
 	double ro,ro2,ro4;
-	double x,y,z,x2_s,xy_s,temp;
+	double x,y,z,z0,s0,R1,scale,x2_s,xy_s,temp;
+	double tol; //incJ calculation tolerance
 	doublecomplex t1,t2,t3,t4,t5,t6,t7,t8,ctemp,e_wb_gv;
+	doublecomplex epp,epm,emp,emm,K0,K1,incJ0p,incJ0m,incJ1p,incJ1m,omp,omm,hzp,hzm,hzzp,hzzm,hzxp,hzxm;
+	doublecomplex K0p,K0m,K1p,K1m,expikr,phase_med,phase_a,phase_z0,sub_xy,sub_z,med_xy,med_z,sub_pref;
 	const double *ex; // coordinate axis of the beam reference frame
 	double ey[3];
-	double r1[3],r1par[3],r1per[3];
+	double r1[3],r1par[3],r1per[3],beam_center_image[3],beam_center_proj[3],prop_image[3];
 	/* complex wave amplitudes of transmitted wave (with phase relative to beam center);
 	 * The transmitted wave can be inhomogeneous wave (when msub is complex), then eIncTran (e) is normalized
 	 * counter-intuitively. Before multiplying by tc, it satisfies (e,e)=1!=||e||^2. This normalization is consistent
@@ -479,6 +602,9 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 			for (i=0;i<local_nvoid_Ndip;i++) { // here we explicitly use that dip_p is real
 				j=3*i;
 				vSubtr(DipoleCoord+j,beam_center,r1);
+				if(r1[0] < dsX) r1[0] = dsX;
+				if(r1[1] < dsX) r1[1] = dsX;
+				if(r1[2] < dsX) r1[2] = dsX;
 				(*InterTerm_real)(r1,gt);
 				cSymMatrVecReal(gt,dip_p,b+j);
 				if (surface) { // add reflected field
@@ -493,7 +619,7 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 			 * interaction it is expected to be singular, so we use an explicit formula for point dipole:
 			 * C0=(8pi/3)*k^4*|p0|^2. Thus we discard the choice of "-int ...", but still the used value should be
 			 * correct for most formulations, e.g. poi, fcd, fcd_st, igt_so. Moreover, it is also logical, since the
-			 * exciting dipole is really point one, in contrast to the dipoles composing the particle.
+			 * exciting dipole is really point one, in contrast to the voxels composing the particle.
 			 */
 			double temp=p0*WaveNum*WaveNum; // in principle, t1=1/k, but we keep a general formula
 			C0dipole=2*FOUR_PI_OVER_THREE*temp*temp;
@@ -580,48 +706,199 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 			}
 			return;
 
+		//new code
 		case B_ELECTRON:
+			if(!surface) hsub = 0;
+
 			for (i=0;i<local_nvoid_Ndip;i++) {
 				j=3*i;
-				// set relative coordinates (in beam's coordinate system)
-				LinComb(DipoleCoord+j,beam_center,1,-1,r1);
 
-				temp = DotProd(r1,prop);
-				vMultScal(temp,prop,r1par);
-				vSubtr(r1,r1par,r1per);
-				ro = vNorm(r1per);
-				z = temp;
-				if(ro != 0) vNormalize(r1per);
-				else LogError(ONE_POS,"electron hit a dipole, this is currently not supported, ro = "EFORM, ro);
+				if(!surface) {
+					LinComb(DipoleCoord+j,beam_center,1,-1,r1); // set relative coordinates (in beam's coordinate system)
+					temp = DotProd(r1,prop);
+					vMultScal(temp,prop,r1par);
+					vSubtr(r1,r1par,r1per);
+					ro = vNorm(r1per);
+					z = temp;
+					if(ro != 0) vNormalize(r1per);
+					if(ro < electron_rho_floor*dsX) ro = electron_rho_floor*dsX; // same threshold as with substrate
+					e_wb_gv = e_w_gv1*ro;
+					cik01_(&e_wb_gv, &t1, &t2, &t3, &t4, &t7, &t5, &t8, &t6);
 
-				//printf("z = "EFORM"\n",z);
-				//printf("b = "EFORM"\n",ro);
-				//printf("g = "EFORM"\n",creal(1./gamma_eps_inv));
+					t4 = imExp(e_w_v*z);
+					cvMultScal_RVec(t4*t8,r1per,v1);
+					cvMultScal_RVec((-I)*gamma1_inv*t4*t7,prop,v2);
+					cvAdd(v1,v2,v3);
+					cvMultScal_cmplx(2*e_pref1,v3,Einc_charge); //Einc from the charge
 
-				e_wb_gv = e_w_gv*ro;
-				cik01_(&e_wb_gv, &t1, &t2, &t3, &t4, &t7, &t5, &t8, &t6);
-				//printf("e_wb_gv\t=\t"CFORM"\n",REIM(e_wb_gv));
-				//printf("besselK0re\t=\t"EFORM"\n",creal(t7));
-				//printf("besselK0im\t=\t"EFORM"\n",cimag(t7));
-				//printf("besselK1re\t=\t"EFORM"\n",creal(t8));
-				//printf("besselK1im\t=\t"EFORM"\n",cimag(t8));
+					t4 = conj(t4);
+					cvMultScal_RVec(-t4*t8,r1per,v1);
+					cvMultScal_RVec((-I)*gamma1_inv*t4*t7,prop,v2);
+					cvAdd(v1,v2,v3);
+					cvMultScal_cmplx(2*e_pref1,v3,Ea_charge); //Ea from the charge
 
-				t4 = imExp(e_w_v*z);
-				//printf("imExp = "CFORM"\n",t4);
-				cvMultScal_RVec(t4*t8,r1per,v1);
-				cvMultScal_RVec((-I)*gamma_eps_inv*t4*t7,prop,v2);
-				cvAdd(v1,v2,v3);
-				cvMultScal_cmplx(e_pref,v3,b+j); //E_inc
-				//printf("Einc\t=\t"CFORM3V"\n",REIM3V(b+j));
-
-				t4 = conj(t4);
-				cvMultScal_RVec(-t4*t8,r1per,v1);
-				cvMultScal_RVec((-I)*gamma_eps_inv*t4*t7,prop,v2);
-				cvAdd(v1,v2,v3);
-				cvMultScal_cmplx(e_pref,v3,E1+j); //E_1
-				//printf("E1\t=\t"CFORM3V"\n",REIM3V(E1+j));
+					cvMultScal_cmplx(1,Einc_charge,b+j); //E_inc
+					cvMultScal_cmplx(1,Ea_charge,E1+j); //E_a
+				}
+				else { // substrate: eqs (S82), (S84) of the SI; parallel beam - eqs (S92), (S93)
+					ElectronSubstrateField(DipoleCoord+j,beam_center,prop,false,b+j);
+					ElectronSubstrateField(DipoleCoord+j,beam_center,prop,true,E1+j);
+				}
 			}
 			return;
+
+		// old code
+		/*case B_ELECTRON:
+					for (i=0;i<local_nvoid_Ndip;i++) {
+						j=3*i;
+						// set relative coordinates (in beam's coordinate system)
+						LinComb(DipoleCoord+j,beam_center,1,-1,r1);
+
+
+						if(surface){
+							//printf("--- j = %i\n",j);
+							//printf("prop\t=\t%g %g %g\n",prop[0],prop[1],prop[2]);
+							if(prop[0] != 0 || prop[1] != 0 || prop[2] != -1) PrintError("Currently, only '-prop 0 0 -1' is supported for '-surf'");
+							ro = sqrt(r1[0]*r1[0]+r1[1]*r1[1]);
+							z = (DipoleCoord+j)[2] + hsub;
+							//printf("b = %lf\n",ro);
+							//printf("z = %lf\n",z);
+							if(ro == 0) LogError(ONE_POS,"electron hit a dipole, this is currently not supported, ro = "EFORM, ro);
+							z0 = beam_center[2] + hsub;
+							e_wb_gv = e_w_gv1*ro;
+							cik01_(&e_wb_gv, &t1, &t2, &t3, &t4, &K0, &t5, &K1, &t6);
+							//printf("e_wb_gv\t=\t"CFORM"\n",REIM(e_wb_gv));
+							//printf("K0\t=\t"CFORM"\n",REIM(K0));
+							//printf("K1\t=\t"CFORM"\n",REIM(K1));
+
+							epp = imExp(e_w_v*(z+z0));
+							epm = imExp(e_w_v*(z-z0));
+							emp = imExp(-e_w_v*(z+z0));
+							emm = imExp(-e_w_v*(z-z0));
+							//printf("epp\t=\t"CFORM"\n",REIM(epp));
+							//printf("epm\t=\t"CFORM"\n",REIM(epm));
+							//printf("emp\t=\t"CFORM"\n",REIM(emp));
+							//printf("emm\t=\t"CFORM"\n",REIM(emm));
+							omp = asinh(z/ro)+ArcCoth(beta1);
+							omm = asinh(z/ro)-ArcCoth(beta1);
+							//printf("Omega+\t=\t"CFORM"\n",REIM(omp));
+							//printf("Omega-\t=\t"CFORM"\n",REIM(omm));
+
+							tol = 1e-8; //how many digits of precision we will have in incJ calculation
+							incJ0p = incJ(0,e_wb_gv,omp,tol);
+							//printf("incJ0+\t=\t"CFORM"\n",REIM(incJ0p));
+							incJ0m = incJ(0,e_wb_gv,omm,tol);
+							//printf("incJ0-\t=\t"CFORM"\n",REIM(incJ0m));
+							incJ1p = incJ(1,e_wb_gv,omp,tol);
+							//printf("incJ1+\t=\t"CFORM"\n",REIM(incJ1p));
+							incJ1m = incJ(1,e_wb_gv,omm,tol);
+							//printf("incJ1-\t=\t"CFORM"\n",REIM(incJ1m));
+
+							R1 = (1/sqrt(ro*ro+z*z));
+							hzp = R1*cexp(-e_wb_gv*ccosh(omp));
+							hzm = R1*cexp(-e_wb_gv*ccosh(omm));
+							//printf("hz+\t=\t"CFORM"\n",REIM(hzp));
+							//printf("hz-\t=\t"CFORM"\n",REIM(hzm));
+							hzzp = -R1*hzp*(z*R1+e_wb_gv*csinh(omp));
+							hzzm = -R1*hzm*(z*R1+e_wb_gv*csinh(omm));
+							//printf("hzz+\t=\t"CFORM"\n",REIM(hzzp));
+							//printf("hzz-\t=\t"CFORM"\n",REIM(hzzm));
+							hzxp = hzp*((1./vgw)*(z*R1*csinh(omp)-ccosh(omp)) - ro*R1*R1);
+							hzxm = hzm*((1./vgw)*(z*R1*csinh(omm)-ccosh(omm)) - ro*R1*R1);
+							//printf("hzx+\t=\t"CFORM"\n",REIM(hzxp));
+							//printf("hzx-\t=\t"CFORM"\n",REIM(hzxm));
+
+
+
+							//Einc: x,y,z
+							(b+j)[0] = -e_pref1*(r1[0]/ro)*(1/(eps1+eps2))*(
+									K1*(emm*(3*eps1+eps2)+epp*(eps1-eps2))
+									- (eps1-eps2)*(
+											emm*(incJ1p + vgw*(z/ro)*hzp - I*(vgw/e_w_v)*hzxp) +
+											epp*(incJ1m + vgw*(z/ro)*hzm + I*(vgw/e_w_v)*hzxm)
+											));
+							//printf("EincX\t=\t"CFORM"\n",REIM((b+j)[0]));
+							(b+j)[1] = -e_pref1*(r1[1]/ro)*(1/(eps1+eps2))*(
+									K1*(emm*(3*eps1+eps2)+epp*(eps1-eps2))
+									- (eps1-eps2)*(
+											emm*(incJ1p + vgw*(z/ro)*hzp - I*(vgw/e_w_v)*hzxp) +
+											epp*(incJ1m + vgw*(z/ro)*hzm + I*(vgw/e_w_v)*hzxm)
+											));
+							//printf("EincY\t=\t"CFORM"\n",REIM((b+j)[1]));
+							(b+j)[2] = (-I*gamma1_inv)*e_pref1*(1/(eps1+eps2))*(
+									K0*(emm*(3*eps1+eps2)-epp*(eps1-eps2))
+									- (eps1-eps2)*(
+											emm*(incJ0p + vgw2*(2*I*e_w_v*hzp - hzzp)) -
+											epp*(incJ0m - vgw2*(2*I*e_w_v*hzm + hzzm))
+											));
+							//printf("EincZ\t=\t"CFORM"\n",REIM((b+j)[2]));
+
+							//E1: x,y,z
+							(E1+j)[0] = e_pref1*(r1[0]/ro)*(1/(eps1+eps2))*(
+									K1*(epm*(3*eps1+eps2) + emp*(eps1-eps2))
+									- (eps1-eps2)*(
+											epm*(incJ1m + vgw*(z/ro)*hzm + I*(vgw/e_w_v)*hzxm) +
+											emp*(incJ1p + vgw*(z/ro)*hzp - I*(vgw/e_w_v)*hzxp)
+											));
+							//printf("E1X\t=\t"CFORM"\n",REIM((E1+j)[0]));
+							(E1+j)[1] = e_pref1*(r1[1]/ro)*(1/(eps1+eps2))*(
+									K1*(epm*(3*eps1+eps2) + emp*(eps1-eps2))
+									- (eps1-eps2)*(
+											epm*(incJ1m + vgw*(z/ro)*hzm + I*(vgw/e_w_v)*hzxm) +
+											emp*(incJ1p + vgw*(z/ro)*hzp - I*(vgw/e_w_v)*hzxp)
+											));
+							//printf("E1Y\t=\t"CFORM"\n",REIM((E1+j)[1]));
+							(E1+j)[2] = (-I*gamma1_inv)*e_pref1*(1/(eps1+eps2))*(
+									K0*(epm*(3*eps1+eps2) - emp*(eps1-eps2))
+									- (eps1-eps2)*(
+											epm*(incJ0m - vgw2*(2*I*e_w_v*hzm + hzzm)) -
+											emp*(incJ0p + vgw2*(2*I*e_w_v*hzp - hzzp))
+											));
+							//printf("E1Z\t=\t"CFORM"\n",REIM((E1+j)[2]));
+
+						}
+						else{
+							temp = DotProd(r1,prop);
+							vMultScal(temp,prop,r1par);
+							vSubtr(r1,r1par,r1per);
+							ro = vNorm(r1per);
+							z = temp;
+							if(ro != 0) vNormalize(r1per);
+							//else LogError(ONE_POS,"electron hit a dipole, this is currently not supported, ro = "EFORM, ro);
+							if(ro < dsX/2) ro = dsX/2;
+
+							//if(prop[2] < DBL_EPSILON && surface) LogError(ONE_POS,"ZAEBIS");
+
+							//printf("z = "EFORM"\n",z);
+							//printf("b = "EFORM"\n",ro);
+							//printf("gamma = "EFORM"\n",creal(1./gamma_eps_inv));
+
+							e_wb_gv = e_w_gv1*ro;
+							cik01_(&e_wb_gv, &t1, &t2, &t3, &t4, &t7, &t5, &t8, &t6);
+							//printf("e_wb_gv\t=\t"CFORM"\n",REIM(e_wb_gv));
+							//printf("besselK0re\t=\t"EFORM"\n",creal(t7));
+							//printf("besselK0im\t=\t"EFORM"\n",cimag(t7));
+							//printf("besselK1re\t=\t"EFORM"\n",creal(t8));
+							//printf("besselK1im\t=\t"EFORM"\n",cimag(t8));
+
+							t4 = imExp(e_w_v*z);
+							//printf("imExp = "CFORM"\n",t4);
+							cvMultScal_RVec(t4*t8,r1per,v1);
+							cvMultScal_RVec((-I)*gamma1_inv*t4*t7,prop,v2);
+							cvAdd(v1,v2,v3);
+							cvMultScal_cmplx(2*e_pref1,v3,b+j); //E_inc
+							//printf("Einc\t=\t"CFORM3V"\n",REIM3V(b+j));
+
+							t4 = conj(t4);
+							cvMultScal_RVec(-t4*t8,r1per,v1);
+							cvMultScal_RVec((-I)*gamma1_inv*t4*t7,prop,v2);
+							cvAdd(v1,v2,v3);
+							cvMultScal_cmplx(2*e_pref1,v3,E1+j); //E_1
+							//printf("E1\t=\t"CFORM3V"\n",REIM3V(E1+j));
+						}
+
+					}
+					return;*/
 
 #ifndef NO_FORTRAN
 		case B_BES_CS:
@@ -651,7 +928,7 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 					fn[0]=fn[1]=fn[3]=fn[4]=0;
 				}
 				else {
-					// TODO: the following looks very complicated, try to simplify
+					// TODO: the following looks very complicated, try to simplify (exp factors can be precalculated)
 					n1=abs(besN)+2;
 					if (besN<=-3) {
 						bjndd_(&n1,&arg,jn1,td1,td2);
@@ -734,8 +1011,8 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 	/* TO ADD NEW BEAM
 	 * add a case above. Identifier ('B_...') should be defined inside 'enum beam' in const.h. This case should set
 	 * complex vector 'b', describing the incident field in the particle reference frame. It is set inside the cycle for
-	 * each dipole of the particle and is calculated using
-	 * 1) 'DipoleCoord' - array of dipole coordinates;
+	 * each voxel of the particle and is calculated using
+	 * 1) 'DipoleCoord' - array of dipole (voxel) coordinates;
 	 * 2) 'prop' - propagation direction of the incident field;
 	 * 3) 'ex' - direction of incident polarization;
 	 * 4) 'ey' - complementary unity vector of polarization (orthogonal to both 'prop' and 'ex');

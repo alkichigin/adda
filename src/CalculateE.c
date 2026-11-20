@@ -627,7 +627,7 @@ static void CalcScatPlane(const enum incpol which,const enum Eftype type)
 static void StoreFields(const enum incpol which,doublecomplex * restrict cmplxF,
 	double * restrict realF,const char * restrict fname_preffix,const char * restrict tmpl UOIP,
 	const char * restrict field_name,const char * restrict fullname)
-/* Write any fields on each dipole to file (internal fields, incident beam, polarization, etc.). Accepts both complex
+/* Write any fields at each voxel to file (internal fields, incident beam, polarization, etc.). Accepts both complex
  * and real fields. Processes the one, which is not null.
  *
  * All processors should write the 'field' to temporary file. These files are named by template 'tmpl' and afterwards
@@ -706,11 +706,11 @@ static void ParticleToBeamRF(double vec[static restrict 3])
 //======================================================================================================================
 
 static void CalcIntegralScatQuantities(const enum incpol which)
-/* calculates all the scattering cross sections, normalized and unnormalized asymmetry parameter, and force on the'
- * particle and each dipole. Cext and Cabs are averaged over orientation, if needed.
+/* calculates all the scattering cross sections, normalized and unnormalized asymmetry parameter, and force on the
+ * particle and each voxel. Cext and Cabs are averaged over orientation, if needed.
  */
 {
-	// Scattering force, extinction force and radiation pressure per dipole
+	// Scattering force, extinction force and radiation pressure per voxel
 	double * restrict Frp;
 	double Cext,Cabs,Csca,Cenh, // Cross sections
 	dummy[3],                // asymmetry parameter*Csca
@@ -766,6 +766,17 @@ static void CalcIntegralScatQuantities(const enum incpol which)
 			SnprintfErr(ONE_POS,fname_cs,MAX_FNAME,"%s/"F_CS"%s",directory,f_suf);
 			CCfile=FOpenErr(fname_cs,"w",ONE_POS);
 			if (calc_Cext) PrintBoth(CCfile,"Cext\t= "GFORM"\nQext\t= "GFORM"\n",Cext,Cext*inv_G);
+
+			//temp
+			if (calc_Cext) {
+				double Pext;
+				double hbar_SI = 1.054571817e-34;
+				double hbar_ev = 6.582119569e-16;
+				Pext = creal(mhost)*0.1*Cext/(FOUR_PI*PI*hbar_SI*hbar_ev*WaveNum0); //SI units are used, assuming Cenh is in nm^2
+				Pext *= 1e-27; //(nm)^3 -> (cm)^3
+				PrintBoth(CCfile,"Pext\t= "EFORM"\n",Pext);
+			}
+
 			if (calc_Cabs) PrintBoth(CCfile,"Cabs\t= "GFORM"\nQabs\t= "GFORM"\n",Cabs,Cabs*inv_G);
 			if (beamtype==B_DIPOLE || beamtype==B_ELECTRON) {
 				Cenh=EnhCross(); // this is here to be run by all processors
@@ -793,7 +804,7 @@ static void CalcIntegralScatQuantities(const enum incpol which)
 				PrintBoth(CCfile,"Csca\t= "GFORM"\nQsca\t= "GFORM"\n",Csca,Csca*inv_G);
 			}
 			if (beamtype==B_ELECTRON) {
-				double Pext, Peels, Pcl;
+				double Pext, Peels, Pcl, Pcltot;
 				double hbar_SI = 1.054571817e-34;
 				double hbar_ev = 6.582119569e-16;
 				fprintf(CCfile,"\nEELS and Cathodoluminescence\n\n");
@@ -808,8 +819,10 @@ static void CalcIntegralScatQuantities(const enum incpol which)
 				//Csca = Cext-Cabs;
 				//PrintBoth(CCfile,"Csca=Cext-Cabs\t= "GFORM"\nQsca\t= "GFORM"\n",Csca,Csca*inv_G);
 				if (calc_Csca){
-					//Pcl = (Cenh - (Cext - Csca))/((FOUR_PI*WaveNum)*PI*hbar*hbar_ev);
-					Pcl = creal(mhost)*0.1*(Cenh - (Cext - Csca))/(FOUR_PI*PI*hbar_SI*hbar_ev*WaveNum0); //SI units are used, assuming C is in nm^2
+					Pcltot = creal(mhost)*0.1*(Cenh - (Cext - Csca))/(FOUR_PI*PI*hbar_SI*hbar_ev*WaveNum0); //SI units are used, assuming C is in nm^2
+					Pcltot *= 1e-27; //(nm)^3 -> (cm)^3
+					Pcl = creal(mhost)*0.1*Csca/(FOUR_PI*PI*hbar_SI*hbar_ev*WaveNum0); //SI units are used, assuming C is in nm^2
+					PrintBoth(CCfile,"Pcltot\t= "EFORM"\n",Pcltot);
 				}
 				else Pcl = creal(mhost)*0.1*(Cenh - Cabs)/(FOUR_PI*PI*hbar_SI*hbar_ev*WaveNum0); //SI units are used, assuming C is in nm^2
 				Pcl *= 1e-27; //(nm)^3 -> (cm)^3
@@ -878,7 +891,7 @@ static void CalcIntegralScatQuantities(const enum incpol which)
 //======================================================================================================================
 
 static void StoreIntFields(const enum incpol which)
-// Write actual internal fields (not exciting) on each dipole to file
+// Write actual internal fields (not exciting) at each voxel to file
 {
 	// calculate fields; e_field=P/(V*chi)=chi_inv*P; for anisotropic - by components
 	nMult_mat(xvec,pvec,chi_inv);
@@ -919,7 +932,7 @@ int CalculateE(const enum incpol which,const enum Eftype type)
 	if (scat_grid) CalcScatGrid(which);
 	// Calculate integral scattering quantities (cross sections, asymmetry parameter, electric forces)
 	if (calc_Cext || calc_Cabs || calc_Csca || calc_asym || calc_mat_force) CalcIntegralScatQuantities(which);
-	// saves internal fields and/or dipole polarizations to text file
+	// saves internal fields and/or dipole (voxel) polarizations to text file
 	if (store_int_field) StoreIntFields(which);
 	if (store_dip_pol) StoreFields(which,pvec,NULL,F_DIPPOL,F_DIPPOL_TMP,"P","Dipole polarizations");
 	return 0;

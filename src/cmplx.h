@@ -35,6 +35,8 @@
 #define REIM(a) creal(a),cimag(a)
 #define REIM3V(a) REIM((a)[0]),REIM((a)[1]),REIM((a)[2])
 
+extern void cik01_(doublecomplex *z, doublecomplex *cbi0, doublecomplex *cdi0, doublecomplex *cbi1, doublecomplex *cdi1, doublecomplex *cbk0, doublecomplex *cdk0, doublecomplex *cbk1, doublecomplex *cdk1);
+
 #ifndef NO_IMEXP_TABLE
 void imExpTableInit(void);
 doublecomplex imExpTable(double arg);
@@ -116,8 +118,8 @@ static inline doublecomplex imExpM1(const double arg)
 /* exp(i*arg) - 1 (should be used for small argument to avoid precision loss
  * We employ special code only for small arguments, ignoring the case when arg is close to 2piN. The latter can,
  * in principle, be handled by preliminary range reduction as in imExpTable. We do not implement it here, because such
- * case is a "coincidence" - may happen for a single dipole (or a plane of dipoles), while the case of small arg may
- * happen for all dipoles. In the latter case loss of precision affects all computed quantities.
+ * case is a "coincidence" - may happen for a single voxel (or a plane of voxels), while the case of small arg may
+ * happen for all voxels. In the latter case loss of precision affects all computed quantities.
  * The used expression through tan(arg/2) follows from general expression for cexpm1 below.
  */
 {
@@ -126,6 +128,224 @@ static inline doublecomplex imExpM1(const double arg)
 		return -2*t/(I+t); // Alternatively, (I-t)*2t/(1+t^2), but we leave the optimization to compiler
 	}
 	else return imExp(arg)-1;
+}
+
+//======================================================================================================================
+
+static inline int sgn(double v){
+  return (v > 0) - (v < 0);
+}
+
+/*
+static inline doublecomplex cсSinh(doublecomplex arg){
+	return (cexp(arg)-cexp(-arg))/2;
+}
+
+static inline doublecomplex cсCosh(doublecomplex arg){
+	return (cexp(arg)+cexp(-arg))/2;
+}
+
+static inline doublecomplex cсCoth(doublecomplex arg){
+	return (cexp(arg)+cexp(-arg))/(cexp(arg)-cexp(-arg));
+}
+*/
+
+static inline doublecomplex ArcCoth(const doublecomplex arg){
+	return .5*clog((arg+1)/(arg-1));
+}
+
+static inline doublecomplex incJintegval(const doublecomplex w, const int nun2m){
+  if(nun2m == 0){
+	  return w;
+  }
+  else{
+	  return csinh(nun2m*w)/nun2m;
+  }
+}
+
+static inline double fac(int n)
+{
+	unsigned int i;
+	double result = 1;
+	for(i = 2; i<=n; i++){
+		result *= i;
+		//printf("%u %lf\n", i, result);
+	}
+	return result;
+}
+
+static inline doublecomplex incJs(const int nu, const doublecomplex arg, const doublecomplex omega, const double tol)
+/* incomplete Bessel function J of complex argument incJ(order, arg, omega, tolerance) through series calculation for small arguments
+ */
+{
+	doublecomplex Sn, Sm;
+	doublecomplex incn0,incn,incm;
+	int n,m;
+	double fc;
+	Sn = 0;
+	incn0 = incJintegval(omega, nu);
+	incn = incn0;
+	n = 0;
+	//printf("---Calculating incJ0\n");
+	//printf("tol %e\n",tol);
+	//printf("abs(creal(incn0))*tol %e\n",fabs(creal(incn0))*tol);
+	//printf("abs(cimag(incn0))*tol %e\n",fabs(cimag(incn0))*tol);
+	//printf("incn0\t=\t"CFORM"\n",REIM(incn0));
+	/* Stopping criterion: the terms grow up to n ~ |arg*exp(|Re omega|)/2| and decay afterwards. The series is
+	 * terminated only past this point and when two consecutive terms are below tol*|sum|. A criterion based on a single
+	 * term (and separately on its real and imaginary parts, as used before) stops prematurely, e.g., in vacuum, where
+	 * Im(omega)=+-pi/2 and the terms are alternately purely real and purely imaginary, so that an occasionally small
+	 * term ends the summation (errors up to 100% for isolated arguments).
+	 */
+	const double npeak = cabs(arg)*exp(fabs(creal(omega)))/2 + 2;
+	const int maxn = 1000;
+	doublecomplex prev = incn0;
+	(void)incn;
+	for (n=0;n<maxn;n++) {
+		Sm = 0;
+		for(m = 0; m <= n; m++){
+			incm = incJintegval(omega, (nu + n - 2*m))/(fac(m)*fac(n - m));
+			Sm += incm;
+		}
+		incn = cpow((-arg/2), n)*Sm;
+		Sn += incn;
+		if (n>npeak && cabs(incn)<=tol*cabs(Sn) && cabs(prev)<=tol*cabs(Sn)) break;
+		prev = incn;
+	}
+	return Sn;
+}
+
+static inline doublecomplex incKpos(const int nu, const doublecomplex arg, const doublecomplex Omega)
+{
+	doublecomplex b0 = ccosh(nu*Omega)/csinh(Omega);
+	doublecomplex b1 = (nu*csinh(nu*Omega) - ccosh(nu*Omega)*(ccosh(Omega)/csinh(Omega)))/(csinh(Omega)*csinh(Omega));
+	doublecomplex b2 = (nu*nu*ccosh(nu*Omega) - 3*nu*csinh(nu*Omega)*(ccosh(Omega)/csinh(Omega)) + (2 + 3/(csinh(Omega)*csinh(Omega)))*ccosh(nu*Omega))/(2*csinh(Omega)*csinh(Omega)*csinh(Omega));
+
+	return cexp(-arg*ccosh(Omega))*((1*b0/arg) + (1*b1/(arg*arg)) + (2*b2/(arg*arg*arg)));
+}
+
+static inline doublecomplex incJl(const int nu, const doublecomplex arg, const doublecomplex Omega)
+{
+	doublecomplex t1,t2,t3,t4,t5,t6,K0,K1;
+	cik01_(&arg, &t1, &t2, &t3, &t4, &K0, &t5, &K1, &t6);
+	if(nu == 0){
+		return sgn(creal(Omega))*K0 - incKpos(nu,arg,Omega);
+	}
+	else if(nu == 1){
+		return sgn(creal(Omega))*K1 - incKpos(nu,arg,Omega);
+	}
+	return 0;
+}
+
+static inline doublecomplex incJ(const int nu, const doublecomplex arg, const doublecomplex Omega, const double tol)
+/* incomplete Bessel function J of complex argument incJ(order, arg, omega, tolerance)
+ */
+{
+	//return incJs(nu,arg,Omega,tol);
+	if(cabs(arg) < 20){
+		//print("KAWABUNGA!!");
+		return incJs(nu,arg,Omega,tol);
+	}
+	else
+	{
+		return incJl(nu,arg,Omega);
+	}
+}
+
+//======================================================================================================================
+/* Generalized exponential integral and incomplete modified Bessel functions K_nu(zeta,eta) of the substrate-aware
+ * electron field. Equation numbers refer to the Supporting Information of the substrate EELS/CL paper (S-equations).
+ */
+#define EULER_GAMMA 0.57721566490153286061
+
+static inline doublecomplex cExpIntE(const int n, const doublecomplex x)
+/* generalized exponential integral E_n(x) = int_1^inf exp(-x t)/t^n dt for integer n>=0 and Re(x)>=0, x!=0;
+ * power series for |x|<=1 and modified Lentz continued fraction otherwise (the standard algorithm, cf. DLMF 8.19.8,
+ * 8.19.17). For n<=0 the closed form is used (eq. S38 for n=0).
+ */
+{
+	const double eps=1e-16;
+	const int maxit=5000;
+	int i,ii;
+	if (n==0) return cexp(-x)/x;
+	if (cabs(x)<=1) {
+		const int nm1=n-1;
+		doublecomplex ans,fact=1,del,psi;
+		ans = (nm1!=0) ? 1.0/nm1 : -clog(x)-EULER_GAMMA;
+		for (i=1;i<=maxit;i++) {
+			fact *= -x/i;
+			if (i!=nm1) del = -fact/(i-nm1);
+			else {
+				psi = -EULER_GAMMA;
+				for (ii=1;ii<=nm1;ii++) psi += 1.0/ii;
+				del = fact*(-clog(x)+psi);
+			}
+			ans += del;
+			if (cabs(del)<cabs(ans)*eps) return ans;
+		}
+		return ans;
+	}
+	else {
+		const double tiny=1e-300;
+		doublecomplex b=x+n,c=1/tiny,d=1/b,h=d,an,del;
+		for (i=1;i<=maxit;i++) {
+			an = -i*(double)(n-1+i);
+			b += 2;
+			d = an*d+b;
+			if (cabs(d)<tiny) d=tiny;
+			c = b+an/c;
+			if (cabs(c)<tiny) c=tiny;
+			d = 1/d;
+			del = c*d;
+			h *= del;
+			if (cabs(del-1)<eps) break;
+		}
+		return h*cexp(-x);
+	}
+}
+
+static inline doublecomplex incKS33(const int nu, const doublecomplex zeta, const doublecomplex eta, const double tol)
+/* K_nu(zeta,eta) by the series in generalized exponential integrals, eq. (S33); efficient for small |zeta exp(-eta)|,
+ * i.e. for large Re(eta) - exactly the case of grazing beams, where eq. (S22) overflows
+ */
+{
+	const int maxit=500;
+	const doublecomplex x=zeta*cexp(eta)/2, y=zeta*cexp(-eta)/2, ep=cexp(nu*eta), em=cexp(-nu*eta);
+	doublecomplex sum=0,fn=1,term; // fn = (-y)^n/n!
+	int n;
+	const double npeak = cabs(y)+2; // terms (-y)^n/n! grow up to n~|y|; stop only past this point
+	doublecomplex prev=0;
+	for (n=0;n<maxit;n++) {
+		if (n>0) fn *= -y/n;
+		term = fn/2*(ep*cExpIntE(n+1-nu,x) + em*cExpIntE(n+1+nu,x));
+		sum += term;
+		if (n>npeak && cabs(term)<=tol*cabs(sum) && cabs(prev)<=tol*cabs(sum)) break;
+		prev = term;
+	}
+	return sum;
+}
+
+static inline doublecomplex incK(const int nu, const doublecomplex zeta, const doublecomplex eta, const double tol)
+/* incomplete modified Bessel function K_nu(zeta,eta) = K_nu(zeta) - J(zeta,nu,eta), eq. (S17), for nu=0,1:
+ * Re(eta)<0 is reduced to Re(eta)>0 by eq. (S18). Then, with x=zeta*exp(eta)/2 and y=zeta*exp(-eta)/2 (|y|<=|x|):
+ * |x|<=1 - series (S22); |y|<=20 - series (S33), whose cancellation is governed by |y| (relative error <~1e-9);
+ * otherwise (large zeta) - large-argument expansion (S25) with n! b_n, accurate to <~1e-3 there. The 3-term expansion
+ * must not be used for moderate zeta (e.g. 1e-2 error at |zeta|=15 and small Re(eta)).
+ */
+{
+	doublecomplex t1,t2,t3,t4,t5,t6,K0,K1,Kfull;
+	if (creal(eta)<0) {
+		cik01_((doublecomplex *)&zeta,&t1,&t2,&t3,&t4,&K0,&t5,&K1,&t6);
+		Kfull = (nu==0) ? K0 : K1;
+		return 2*Kfull - incK(nu,zeta,-eta,tol);
+	}
+	if (cabs(zeta*cexp(-eta))>40) return incKpos(nu,zeta,eta);
+	if (cabs(zeta*cexp(eta))<=2) {
+		cik01_((doublecomplex *)&zeta,&t1,&t2,&t3,&t4,&K0,&t5,&K1,&t6);
+		Kfull = (nu==0) ? K0 : K1;
+		return Kfull - incJs(nu,zeta,eta,tol);
+	}
+	return incKS33(nu,zeta,eta,tol);
 }
 
 //======================================================================================================================

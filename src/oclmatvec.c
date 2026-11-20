@@ -13,6 +13,18 @@
  * You should have received a copy of the GNU General Public License along with ADDA. If not, see
  * <http://www.gnu.org/licenses/>.
  */
+/* The following tests for compilation inconsistencies, but also helps proper syntax checking in IDE, such as Eclipse.
+ * Otherwise, a lot of unresolved-symbol errors are produced, when another build configuration is selected.
+ */
+#ifndef OPENCL
+#  error "This file requires OPENCL to be defined"
+#  define OPENCL
+#endif
+#ifdef SPARSE
+#  error "This file is incompatible with SPARSE"
+#  undef SPARSE
+#endif
+
 #include "const.h" // keep this first
 // project headers
 #include "comm.h"
@@ -72,7 +84,7 @@ void MatVec (doublecomplex * restrict argvec,    // the argument vector
 	 *
 	 * For reflected matrix the situation is similar.
 	 * R.x=F(-1)(F(R).H(X)), where R is a vector, similar with G, where R[i,j,k=0] is for interaction of two bottom
-	 * dipoles. H(X) is FxFy(Fz^(-1)(X)), where Fx,... are Fourier transforms along corresponding coordinates. It can be
+	 * voxels. H(X) is FxFy(Fz^(-1)(X)), where Fx,... are Fourier transforms along corresponding coordinates. It can be
 	 * computed along with F(X).
 	 * Matrix R is symmetric (as a whole), but not in small parts, so R(i,j)=R(j,i)(T). Hence, in contrast to D, for
 	 * 'transpose' actual transpose (changing sign of a few elements) of 3x3 submatrix is required along with addressing

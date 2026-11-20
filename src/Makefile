@@ -34,6 +34,14 @@ ifeq ($(filter else-if,$(.FEATURES)),)
   $(error make does not support else-if)
 endif
 
+# Parallelization options. The number can be adjusted according to the number of cores. Alternatively, it can be turned
+# of (overridden) by adding -j1 to the make invocation
+MAKEFLAGS += -j8
+ifneq ($(filter output-sync,$(.FEATURES)),)
+# this compromises clearness of the output with interactivity. --output-sync=recurse is the most robust, but the
+# ouput will appear only at the end (for such scenarios, one can use -s instead)
+  MAKEFLAGS += --output-sync=target --no-print-directory
+endif
 #=======================================================================================================================
 # Fixed definitions for non-compilation targets
 #=======================================================================================================================
@@ -175,6 +183,8 @@ override EXTRA_FLAGS +=
 #FFTW3_LIB_PATH := $(HOME)/lib
 #FFTW3_INC_PATH := "$(abspath ./../lib)"
 #FFTW3_LIB_PATH := "$(abspath ./../lib)"
+FFTW3_INC_PATH := "c:\fftw"
+FFTW3_LIB_PATH := "c:\fftw"
 
 # --Fortran library path--
 # If your environment does not specify search path for Fortran libraries, you may get errors during linking of ADDA.

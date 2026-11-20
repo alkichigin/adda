@@ -1,8 +1,8 @@
-'''
-# The code represents the figure 15 with demonstation of incident field 
+#!/usr/bin/env python3
+
+# The code represents the figure 15 with demonstration of incident field 
 # intensity profiles for 4 types of Bessel beams (CS, CS', TEL, and TML) and 
 # their scattering intensities on a cube.
-'''
 
 import os
 import matplotlib.pyplot as plt
@@ -55,6 +55,7 @@ bb.plotData4(theta1,iper1,theta2,iper2,theta3,iper3,theta4,iper4,2,ax)
 
 # data save
 os.makedirs('saved', exist_ok=True)
+#if needed change .pdf on other types (for example .svg)
 plt.savefig('saved/fig15_cube.pdf', bbox_inches='tight')
 
 plt.show()
