@@ -191,21 +191,26 @@ static inline doublecomplex incJs(const int nu, const doublecomplex arg, const d
 	//printf("abs(creal(incn0))*tol %e\n",fabs(creal(incn0))*tol);
 	//printf("abs(cimag(incn0))*tol %e\n",fabs(cimag(incn0))*tol);
 	//printf("incn0\t=\t"CFORM"\n",REIM(incn0));
-	while(fabs(creal(incn)) >= fabs(creal(incn0))*tol || fabs(cimag(incn)) >= fabs(cimag(incn0))*tol){
+	/* Stopping criterion: the terms grow up to n ~ |arg*exp(|Re omega|)/2| and decay afterwards. The series is
+	 * terminated only past this point and when two consecutive terms are below tol*|sum|. A criterion based on a single
+	 * term (and separately on its real and imaginary parts, as used before) stops prematurely, e.g., in vacuum, where
+	 * Im(omega)=+-pi/2 and the terms are alternately purely real and purely imaginary, so that an occasionally small
+	 * term ends the summation (errors up to 100% for isolated arguments).
+	 */
+	const double npeak = cabs(arg)*exp(fabs(creal(omega)))/2 + 2;
+	const int maxn = 1000;
+	doublecomplex prev = incn0;
+	(void)incn;
+	for (n=0;n<maxn;n++) {
 		Sm = 0;
-
 		for(m = 0; m <= n; m++){
-			//fc = 1/(fac(m)*fac(n - m));
 			incm = incJintegval(omega, (nu + n - 2*m))/(fac(m)*fac(n - m));
-			//printf("%i %i integval "CFORM" fc=%e incm "CFORM"\n",n,m,REIM(incJintegval(omega, (nu + n - 2*m))),fc,REIM(incm));
 			Sm += incm;
 		}
 		incn = cpow((-arg/2), n)*Sm;
 		Sn += incn;
-		//printf("n %i, incn = "CFORM", Sm = "CFORM"\n",n,REIM(incn),REIM(Sm));
-
-		n++;
-		//if(n>=15) return Sn;
+		if (n>npeak && cabs(incn)<=tol*cabs(Sn) && cabs(prev)<=tol*cabs(Sn)) break;
+		prev = incn;
 	}
 	return Sn;
 }
@@ -308,19 +313,24 @@ static inline doublecomplex incKS33(const int nu, const doublecomplex zeta, cons
 	const doublecomplex x=zeta*cexp(eta)/2, y=zeta*cexp(-eta)/2, ep=cexp(nu*eta), em=cexp(-nu*eta);
 	doublecomplex sum=0,fn=1,term; // fn = (-y)^n/n!
 	int n;
+	const double npeak = cabs(y)+2; // terms (-y)^n/n! grow up to n~|y|; stop only past this point
+	doublecomplex prev=0;
 	for (n=0;n<maxit;n++) {
 		if (n>0) fn *= -y/n;
 		term = fn/2*(ep*cExpIntE(n+1-nu,x) + em*cExpIntE(n+1+nu,x));
 		sum += term;
-		if (n>=1 && cabs(term)<=tol*cabs(sum)) break;
+		if (n>npeak && cabs(term)<=tol*cabs(sum) && cabs(prev)<=tol*cabs(sum)) break;
+		prev = term;
 	}
 	return sum;
 }
 
 static inline doublecomplex incK(const int nu, const doublecomplex zeta, const doublecomplex eta, const double tol)
 /* incomplete modified Bessel function K_nu(zeta,eta) = K_nu(zeta) - J(zeta,nu,eta), eq. (S17), for nu=0,1:
- * Re(eta)<0 is reduced to Re(eta)>0 by eq. (S18); |zeta|>=20 - large-argument expansion (S25), with n! b_n;
- * small |zeta exp(eta)| - series (S22); otherwise - series (S33).
+ * Re(eta)<0 is reduced to Re(eta)>0 by eq. (S18). Then, with x=zeta*exp(eta)/2 and y=zeta*exp(-eta)/2 (|y|<=|x|):
+ * |x|<=1 - series (S22); |y|<=20 - series (S33), whose cancellation is governed by |y| (relative error <~1e-9);
+ * otherwise (large zeta) - large-argument expansion (S25) with n! b_n, accurate to <~1e-3 there. The 3-term expansion
+ * must not be used for moderate zeta (e.g. 1e-2 error at |zeta|=15 and small Re(eta)).
  */
 {
 	doublecomplex t1,t2,t3,t4,t5,t6,K0,K1,Kfull;
@@ -329,7 +339,7 @@ static inline doublecomplex incK(const int nu, const doublecomplex zeta, const d
 		Kfull = (nu==0) ? K0 : K1;
 		return 2*Kfull - incK(nu,zeta,-eta,tol);
 	}
-	if (cabs(zeta)>=20) return incKpos(nu,zeta,eta);
+	if (cabs(zeta*cexp(-eta))>40) return incKpos(nu,zeta,eta);
 	if (cabs(zeta*cexp(eta))<=2) {
 		cik01_((doublecomplex *)&zeta,&t1,&t2,&t3,&t4,&K0,&t5,&K1,&t6);
 		Kfull = (nu==0) ? K0 : K1;
