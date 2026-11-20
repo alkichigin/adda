@@ -721,7 +721,7 @@ void GenerateB (const enum incpol which,   // x - or y polarized incident light
 					ro = vNorm(r1per);
 					z = temp;
 					if(ro != 0) vNormalize(r1per);
-					if(ro < dsX) ro = dsX;
+					if(ro < electron_rho_floor*dsX) ro = electron_rho_floor*dsX; // same threshold as with substrate
 					e_wb_gv = e_w_gv1*ro;
 					cik01_(&e_wb_gv, &t1, &t2, &t3, &t4, &t7, &t5, &t8, &t6);
 
